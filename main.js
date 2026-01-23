@@ -3,7 +3,8 @@ const { fork } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
 const { buildTrayTemplate } = require("./tray-menu");
 const { getSettingsHtml } = require("./settings-window");
-const { loadSettings } = require("./settings-store");
+const { loadSettings, saveSettings } = require("./settings-store");
+const { validateHotkey } = require("./settings-ipc");
 const { getTrayTitle } = require("./tray-utils");
 
 let electron;
@@ -30,7 +31,8 @@ let settingsWindow;
 let settingsCache;
 
 function getHotkey() {
-  return process.env.CHAT_HOTKEY || "CommandOrControl+Shift+Space";
+  const settings = getSettings();
+  return settings.hotkey || "CommandOrControl+Shift+Space";
 }
 
 function getIndexHtmlPath() {
@@ -67,6 +69,9 @@ async function waitForServerReady(
 
 function startServer({ port, model, base }) {
   const env = buildServerEnv({ port, model, base });
+  if (app && typeof app.getPath === "function") {
+    env.USER_DATA_PATH = app.getPath("userData");
+  }
   const appPath =
     app && typeof app.getAppPath === "function" ? app.getAppPath() : __dirname;
   const serverPath = path.join(appPath, "server.js");
@@ -132,14 +137,16 @@ function createSettingsWindow() {
     width: 420,
     height: 300,
     resizable: false,
+    frame: false,
     title: "Settings",
+    titleBarStyle: "hidden",
     webPreferences: {
+      preload: path.join(__dirname, "settings-preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
-  const html = encodeURIComponent(getSettingsHtml());
-  settingsWindow.loadURL(`data:text/html,${html}`);
+  settingsWindow.loadFile(path.join(__dirname, "settings.html"));
   settingsWindow.on("closed", () => {
     settingsWindow = null;
   });
@@ -271,6 +278,41 @@ async function boot() {
 
 if (app && typeof app.whenReady === "function") {
   app.whenReady().then(boot);
+
+  electron.ipcMain.handle("settings:load", () => getSettings());
+  electron.ipcMain.handle("settings:save", (_evt, payload) => {
+    const userData = app.getPath("userData");
+    const next = saveSettings(userData, { ...getSettings(), ...payload });
+    settingsCache = next;
+    const hk = next.hotkey;
+    if (!validateHotkey(hk)) {
+      return { ok: false, error: "Invalid hotkey" };
+    }
+    if (globalShortcut && typeof globalShortcut.register === "function") {
+      globalShortcut.unregisterAll();
+      try {
+        globalShortcut.register(hk, () => {
+          if (win && win.isVisible()) {
+            win.hide();
+          } else if (win) {
+            win.show();
+            win.focus();
+          }
+        });
+      } catch {
+        return { ok: false, error: "Failed to register hotkey" };
+      }
+    }
+    return { ok: true, settings: next };
+  });
+  electron.ipcMain.handle("settings:close", () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.close();
+    return true;
+  });
+  electron.ipcMain.handle("settings:minimize", () => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.minimize();
+    return true;
+  });
 
   app.on("will-quit", () => {
     globalShortcut.unregisterAll();

@@ -7,6 +7,7 @@ const path = require("node:path");
 const { execSync } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
 const { chooseModel } = require("./model-selection");
+const { loadSettings } = require("./settings-store");
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 
@@ -150,16 +151,20 @@ app.post("/chat", async (req, res) => {
     } else if (!lastModel && chosenModel) {
       saveLastModel(chosenModel);
     }
+    const settings = loadSettings(process.env.USER_DATA_PATH || __dirname);
+    const systemPrompt = settings.systemPrompt || SYSTEM_PROMPT;
+    const temperature = typeof settings.temperature === "number" ? settings.temperature : 0.7;
     const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
       body: JSON.stringify({
         model: chosenModel,
         stream: true,
         messages: [
-          ...(SYSTEM_PROMPT
-            ? [{ role: "system", content: SYSTEM_PROMPT }]
+          ...(systemPrompt
+            ? [{ role: "system", content: systemPrompt }]
             : []),
           { role: "user", content: userMsg },
         ],
+        options: { temperature },
       }),
       method: "POST",
       headers: { "Content-Type": "application/json" },
