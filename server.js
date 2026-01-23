@@ -5,6 +5,7 @@ const cors = require('cors');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
+const { findAvailablePort } = require('./port-allocator');
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434';
@@ -108,7 +109,13 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-http.createServer(app).listen(PORT, () => {
-  console.log(`[server] listening on http://127.0.0.1:${PORT}`);
-  console.log(`[server] default model ${MODEL} at ${OLLAMA_BASE}`);
-});
+(async () => {
+  const port = await findAvailablePort(PORT);
+  if (port !== PORT) {
+    process.env.CHAT_SERVER_PORT = String(port);
+  }
+  http.createServer(app).listen(port, () => {
+    console.log(`[server] listening on http://127.0.0.1:${port}`);
+    console.log(`[server] default model ${MODEL} at ${OLLAMA_BASE}`);
+  });
+})();

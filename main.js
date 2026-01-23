@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { fork } = require('node:child_process');
+const { findAvailablePort } = require('./port-allocator');
 
 let electron;
 try {
@@ -99,7 +100,7 @@ function createMainWindow() {
 }
 
 async function boot() {
-  const port = DEFAULT_PORT;
+  const port = await findAvailablePort(DEFAULT_PORT);
   process.env.CHAT_SERVER_PORT = String(port);
   startServer({ port, model: DEFAULT_MODEL, base: DEFAULT_BASE });
 
