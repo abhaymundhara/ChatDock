@@ -664,6 +664,13 @@
 
         try {
           const selectedModel = modelSelect ? modelSelect.value : "";
+          if (!selectedModel) {
+            aiBubble.classList.remove("thinking");
+            aiBubble.textContent = "⚠️ No model selected. Pick a model first.";
+            if (indicator) indicator.classList.remove("visible");
+            if (aiStatus) aiStatus.textContent = "Select a model";
+            return;
+          }
           const resp = await fetch(CHAT_ENDPOINT, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -725,6 +732,7 @@
           const data = await r.json();
           const models = Array.isArray(data.models) ? data.models : [];
           const preferred = localStorage.getItem("preferred_model");
+          const lastModel = data && data.lastModel ? String(data.lastModel) : "";
           modelSelect.innerHTML = "";
           if (models.length === 0) {
             const opt = document.createElement("option");
@@ -741,7 +749,10 @@
             opt.textContent = name;
             modelSelect.appendChild(opt);
           }
-          if (preferred && models.includes(preferred)) {
+          if (lastModel && models.includes(lastModel)) {
+            modelSelect.value = lastModel;
+            localStorage.setItem("preferred_model", lastModel);
+          } else if (preferred && models.includes(preferred)) {
             modelSelect.value = preferred;
           } else {
             modelSelect.value = models[0];
@@ -749,6 +760,11 @@
           }
           modelSelect.addEventListener("change", () => {
             localStorage.setItem("preferred_model", modelSelect.value);
+            fetch(`${CHAT_BASE}/models/selected`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ model: modelSelect.value }),
+            }).catch(() => {});
           });
         } catch (e) {
           modelSelect.innerHTML = "";

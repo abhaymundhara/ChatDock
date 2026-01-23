@@ -44,7 +44,7 @@ npm install
 ## 🧪 Development
 
 ```bash
-npm run dev   # Starts server + Electron together
+npm run dev   # Starts Electron (server auto-starts)
 ```
 
 ---

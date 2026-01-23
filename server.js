@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execSync } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
+const { chooseModel } = require("./model-selection");
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 
@@ -70,6 +71,7 @@ app.get("/health", async (_req, res) => {
   }
 });
 app.get("/models", async (_req, res) => {
+  const lastModel = loadLastModel();
   try {
     const upstream = await fetch(`${OLLAMA_BASE}/api/tags`, { method: "GET" });
     if (!upstream.ok) {
@@ -77,6 +79,7 @@ app.get("/models", async (_req, res) => {
         models: [],
         online: false,
         pulling: [...PULLING_MODELS],
+        lastModel,
         error: `Upstream error: ${upstream.status} ${upstream.statusText}`,
       });
     }
@@ -84,26 +87,35 @@ app.get("/models", async (_req, res) => {
     const models = Array.isArray(data.models)
       ? data.models.map((m) => m.name).filter(Boolean)
       : [];
-    res.json({ models, online: true, pulling: [...PULLING_MODELS] });
+    res.json({ models, online: true, pulling: [...PULLING_MODELS], lastModel });
   } catch (err) {
     res.json({
       models: [],
       online: false,
       pulling: [...PULLING_MODELS],
+      lastModel,
       error: err?.message || String(err),
     });
   }
+});
+
+app.post("/models/selected", (req, res) => {
+  const model = String(req.body?.model || "").trim();
+  if (!model) {
+    return res.status(400).json({ ok: false, error: "Model is required" });
+  }
+  saveLastModel(model);
+  return res.json({ ok: true, model });
 });
 
 /* Chat (streaming) */
 app.post("/chat", async (req, res) => {
   try {
     const userMsg = String(req.body?.message ?? "");
-    const chosenModel = req.body?.model
-      ? String(req.body.model)
-      : loadLastModel();
-    if (req.body?.model) saveLastModel(req.body.model);
-    if (!chosenModel) {
+    const requestedModel = req.body?.model ? String(req.body.model) : "";
+    const lastModel = loadLastModel();
+    let availableModels = [];
+    if (!requestedModel && !lastModel) {
       try {
         const upstreamTags = await fetch(`${OLLAMA_BASE}/api/tags`, {
           method: "GET",
@@ -111,20 +123,32 @@ app.post("/chat", async (req, res) => {
         const data = upstreamTags.ok
           ? await upstreamTags.json().catch(() => ({}))
           : {};
-        const models = Array.isArray(data.models)
+        availableModels = Array.isArray(data.models)
           ? data.models.map((m) => m.name).filter(Boolean)
           : [];
-        return res.status(400).json({
-          error:
-            "No model specified. Provide `model` in the request body (it will be remembered for next run).",
-          availableModels: models,
-        });
-      } catch (e) {
-        return res.status(400).json({
-          error:
-            "No model specified and unable to fetch available models from Ollama.",
-        });
+      } catch {
+        availableModels = [];
       }
+    }
+
+    const chosenModel = chooseModel({
+      requested: requestedModel,
+      last: lastModel,
+      available: availableModels,
+    });
+
+    if (!chosenModel) {
+      return res.status(400).json({
+        error:
+          "No model available. Install a model with Ollama and try again.",
+        availableModels,
+      });
+    }
+
+    if (requestedModel && requestedModel !== lastModel) {
+      saveLastModel(requestedModel);
+    } else if (!lastModel && chosenModel) {
+      saveLastModel(chosenModel);
     }
     const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
       body: JSON.stringify({

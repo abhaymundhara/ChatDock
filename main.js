@@ -141,6 +141,9 @@ function createTray({ serverUrl }) {
   const icon = electron.nativeImage.createFromDataURL(
     `data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}`
   );
+  if (icon && typeof icon.setTemplateImage === "function") {
+    icon.setTemplateImage(true);
+  }
   tray = new electron.Tray(icon);
   tray.setToolTip("ChatDock");
 
@@ -172,12 +175,9 @@ function createTray({ serverUrl }) {
     return item;
   }));
 
-  tray.on("click", () => {
-    tray.popUpContextMenu(menu);
-  });
-  tray.on("right-click", () => {
-    tray.popUpContextMenu(menu);
-  });
+  tray.setContextMenu(menu);
+  tray.on("click", () => tray.popUpContextMenu(menu));
+  tray.on("right-click", () => tray.popUpContextMenu(menu));
 }
 
 async function boot() {

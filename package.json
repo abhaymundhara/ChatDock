@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "server": "node server.js",
-    "dev": "npm-run-all --parallel server start",
+    "dev": "electron .",
     "build": "electron-builder"
   },
   "devDependencies": {
