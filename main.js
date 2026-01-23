@@ -3,6 +3,7 @@ const { fork } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
 const { buildTrayTemplate } = require("./tray-menu");
 const { getSettingsHtml } = require("./settings-window");
+const { loadSettings } = require("./settings-store");
 const { getTrayTitle } = require("./tray-utils");
 
 let electron;
@@ -26,6 +27,7 @@ let win;
 let serverProcess;
 let tray;
 let settingsWindow;
+let settingsCache;
 
 function getHotkey() {
   return process.env.CHAT_HOTKEY || "CommandOrControl+Shift+Space";
@@ -85,6 +87,16 @@ function showErrorWindow(message) {
   });
   const html = encodeURIComponent(`<h2>ChatDock</h2><p>${message}</p>`);
   errWin.loadURL(`data:text/html,${html}`);
+}
+
+function getSettings() {
+  if (settingsCache) return settingsCache;
+  if (!app || typeof app.getPath !== "function") {
+    settingsCache = loadSettings(__dirname);
+  } else {
+    settingsCache = loadSettings(app.getPath("userData"));
+  }
+  return settingsCache;
 }
 
 function createMainWindow() {
