@@ -1,6 +1,8 @@
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { findAvailablePort } = require('./port-allocator');
+const { buildTrayTemplate } = require('./tray-menu');
+const { getSettingsHtml } = require('./settings-window');
 
 let electron;
 try {
@@ -19,6 +21,8 @@ const DEFAULT_BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434';
 
 let win;
 let serverProcess;
+let tray;
+let settingsWindow;
 
 function getHotkey() {
   return 'CommandOrControl+Shift+Space';
@@ -99,6 +103,77 @@ function createMainWindow() {
   win.loadFile(getIndexHtmlPath()); // Your floating chat bar HTML file
 }
 
+function createSettingsWindow() {
+  if (settingsWindow && !settingsWindow.isDestroyed()) {
+    settingsWindow.show();
+    settingsWindow.focus();
+    return settingsWindow;
+  }
+  settingsWindow = new BrowserWindow({
+    width: 420,
+    height: 300,
+    resizable: false,
+    title: 'Settings',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+  const html = encodeURIComponent(getSettingsHtml());
+  settingsWindow.loadURL(`data:text/html,${html}`);
+  settingsWindow.on('closed', () => {
+    settingsWindow = null;
+  });
+  return settingsWindow;
+}
+
+function createTray({ serverUrl }) {
+  const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect x="1" y="1" width="14" height="14" rx="3" ry="3" fill="#1f2937" />
+  <circle cx="8" cy="8" r="3" fill="#60a5fa" />
+</svg>`;
+  const icon = electron.nativeImage.createFromDataURL(
+    `data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}`
+  );
+  tray = new electron.Tray(icon);
+  tray.setToolTip('ChatDock');
+
+  const template = buildTrayTemplate({ serverUrl });
+  const menu = electron.Menu.buildFromTemplate(template.map((item) => {
+    if (item.id === 'ask-ai') {
+      return {
+        ...item,
+        click: () => {
+          if (win) {
+            win.show();
+            win.focus();
+          }
+        }
+      };
+    }
+    if (item.id === 'settings') {
+      return {
+        ...item,
+        click: () => createSettingsWindow()
+      };
+    }
+    if (item.id === 'quit') {
+      return {
+        ...item,
+        click: () => app.quit()
+      };
+    }
+    return item;
+  }));
+
+  tray.on('click', () => {
+    tray.popUpContextMenu(menu);
+  });
+  tray.on('right-click', () => {
+    tray.popUpContextMenu(menu);
+  });
+}
+
 async function boot() {
   const port = await findAvailablePort(DEFAULT_PORT);
   process.env.CHAT_SERVER_PORT = String(port);
@@ -111,6 +186,11 @@ async function boot() {
   }
 
   createMainWindow();
+  const serverUrl = `http://127.0.0.1:${port}`;
+  createTray({ serverUrl });
+  if (app.dock && typeof app.dock.hide === 'function') {
+    app.dock.hide();
+  }
 
   // GLOBAL HOTKEY
   globalShortcut.register(getHotkey(), () => {
@@ -131,6 +211,7 @@ if (app && typeof app.whenReady === 'function') {
     if (serverProcess && !serverProcess.killed) {
       serverProcess.kill();
     }
+    if (tray) tray.destroy();
   });
 }
 
