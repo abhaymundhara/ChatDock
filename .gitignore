@@ -26,3 +26,6 @@ coverage/
 # Editor
 .vscode/
 .idea/
+
+# Worktrees
+.worktrees/
