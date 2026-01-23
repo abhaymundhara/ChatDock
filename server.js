@@ -5,53 +5,13 @@ const cors = require('cors');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
-const { shouldAutoPull } = require('./server-config');
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434';
 const MODEL = process.env.OLLAMA_MODEL || 'gemma2:2b';
 
-/* Track in-progress pulls so UI can show status */
-const PULLING_MODELS = new Set();
-
 /* ===== Ollama model helpers ===== */
-async function modelExists(name) {
-  try {
-    const r = await fetch(`${OLLAMA_BASE}/api/show`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    return r.ok;
-  } catch {
-    return false;
-  }
-}
-async function pullModel(name) {
-  const r = await fetch(`${OLLAMA_BASE}/api/pull`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, stream: false })
-  });
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`ollama pull failed: ${r.status} ${r.statusText} ${text}`.trim());
-  }
-  return r.json().catch(() => ({}));
-}
-async function ensureModel(name) {
-  const exists = await modelExists(name);
-  if (exists) return { pulled: false };
-  console.log(`[ollama] pulling model "${name}"...`);
-  PULLING_MODELS.add(name);
-  try {
-    const out = await pullModel(name);
-    console.log(`[ollama] pull complete for "${name}"`);
-    return { pulled: true, details: out };
-  } finally {
-    PULLING_MODELS.delete(name);
-  }
-}
+const PULLING_MODELS = new Set();
 /* ================================= */
 
 // Load system prompt from file (optional)
@@ -73,31 +33,12 @@ app.use(cors());
 app.use(express.json());
 
 
-/* Optional auto-pull (disabled by default) */
-if (shouldAutoPull()) {
-  ensureModel(MODEL).then((r) => {
-    if (r.pulled) console.log(`[ollama] default model ready: ${MODEL}`);
-  }).catch(err => {
-    console.warn('[ollama] ensure model failed:', err?.message || String(err));
-  });
-}
-
-
 /* Health + model endpoints */
 app.get('/health', async (_req, res) => {
   try {
     const r = await fetch(`${OLLAMA_BASE}/api/version`, { method: 'GET' });
     res.json({ server: true, ollama: r.ok });
   } catch { res.json({ server: true, ollama: false }); }
-});
-app.post('/models/pull', async (req, res) => {
-  try {
-    const name = String(req.body?.name || MODEL);
-    const result = await ensureModel(name);
-    res.json({ ok: true, model: name, ...result });
-  } catch (err) {
-    res.json({ ok: false, error: err?.message || String(err) });
-  }
 });
 app.get('/models', async (_req, res) => {
   try {
