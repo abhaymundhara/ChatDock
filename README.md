@@ -13,7 +13,7 @@ The long-term goal is to run this chat bar fully locally using tools like [Ollam
 - Message thread floats above the bar like a messaging app
 - Live prompt + response system via OpenAI API (for now)
 - Designed to evolve into a self-hosted AI tool
-- Can be called on top of any app on any screen with a global hotkey(control+shift+space)
+- Can be called on top of any app on any screen with a global hotkey (CommandOrControl+Shift+Space)
 
 ---
 
@@ -46,11 +46,13 @@ npm install
 npm run dev   # Starts server + Electron together
 ```
 
-### Production
+### Production (Packaged Builds)
 
 ```bash
-npm run build   # (coming soon)
+npm run build   # Builds installers for your current OS
 ```
+
+Build outputs are written to `dist/`. To produce installers for Windows, macOS, and Linux, run `npm run build` on each OS.
 
 ---
 
@@ -73,7 +75,7 @@ CHAT_SERVER_PORT=3001
 - [ ] Browser Use(more of agentic path)
 - [ ] Multi-chat sessions
 - [ ] Rich message formatting
-- [ ] Auto-updates & packaging for macOS/Windows/Linux
+- [ ] Auto-updates
 
 ---
 
