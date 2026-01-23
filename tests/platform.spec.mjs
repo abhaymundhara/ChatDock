@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { getHotkey, getIndexHtmlPath } from '../main.js';
+import { getHotkey, getIndexHtmlPath } from '../src/main/main.js';
 
 test('hotkey uses CommandOrControl', () => {
   assert.equal(getHotkey(), 'CommandOrControl+Shift+Space');

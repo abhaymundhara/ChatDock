@@ -5,16 +5,16 @@ const cors = require("cors");
 const fs = require("node:fs");
 const path = require("node:path");
 const { execSync } = require("node:child_process");
-const { findAvailablePort } = require("./port-allocator");
-const { chooseModel } = require("./model-selection");
-const { loadSettings } = require("./settings-store");
+const { findAvailablePort } = require("../shared/port-allocator");
+const { chooseModel } = require("../renderer/components/model-selection");
+const { loadSettings } = require("./utils/settings-store");
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 
 // Persist the last user-chosen model between runs
-const LAST_MODEL_PATH = path.join(__dirname, "last_model.txt");
+const LAST_MODEL_PATH = path.join(__dirname, "../../config/last_model.txt");
 function loadLastModel() {
   try {
     const v = fs.readFileSync(LAST_MODEL_PATH, "utf-8").trim();
@@ -41,7 +41,7 @@ const PULLING_MODELS = new Set();
 /* ================================= */
 
 // Load system prompt from file (optional)
-const PROMPT_PATH = path.join(__dirname, "prompt.txt");
+const PROMPT_PATH = path.join(__dirname, "../../assets/prompt.txt");
 let SYSTEM_PROMPT = "";
 try {
   SYSTEM_PROMPT = fs.readFileSync(PROMPT_PATH, "utf-8");

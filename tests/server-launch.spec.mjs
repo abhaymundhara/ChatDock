@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildServerEnv } from '../main.js';
+import { buildServerEnv } from '../src/main/main.js';
 
 test('server env includes port/model/base', () => {
   const env = buildServerEnv({ port: 3456, model: 'm1', base: 'http://127.0.0.1:11434' });

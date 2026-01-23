@@ -2,13 +2,14 @@
   "name": "ChatDock",
   "version": "1.0.0",
   "private": true,
-  "main": "main.js",
+  "main": "src/main/main.js",
   "type": "commonjs",
   "scripts": {
     "start": "electron .",
-    "server": "node server.js",
+    "server": "node src/server/server.js",
     "dev": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "test": "node --test tests/*.spec.mjs"
   },
   "devDependencies": {
     "electron": "^40.0.0",
@@ -25,17 +26,15 @@
     "appId": "com.chatdock.app",
     "productName": "ChatDock",
     "files": [
-      "main.js",
-      "preload.js",
-      "server.js",
-      "Index.html",
-      "renderer-config.js",
-      "prompt.txt",
+      "src/**/*",
+      "assets/**/*",
+      "config/**/*",
       "package.json"
     ],
     "asarUnpack": [
-      "server.js",
-      "prompt.txt"
+      "src/server/**/*",
+      "assets/**/*",
+      "config/**/*"
     ],
     "mac": {
       "target": [

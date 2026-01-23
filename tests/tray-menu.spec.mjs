@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTrayTemplate } from '../tray-menu.js';
+import { buildTrayTemplate } from '../src/main/tray/tray-menu.js';
 
 test('tray menu includes server url and actions', () => {
   const tpl = buildTrayTemplate({ serverUrl: 'http://127.0.0.1:3001' });

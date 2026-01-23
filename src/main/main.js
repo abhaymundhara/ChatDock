@@ -1,11 +1,11 @@
 const path = require("node:path");
 const { fork } = require("node:child_process");
-const { findAvailablePort } = require("./port-allocator");
-const { buildTrayTemplate } = require("./tray-menu");
-const { getSettingsHtml } = require("./settings-window");
-const { loadSettings, saveSettings } = require("./settings-store");
-const { validateHotkey } = require("./settings-ipc");
-const { getTrayTitle } = require("./tray-utils");
+const { findAvailablePort } = require("../shared/port-allocator");
+const { buildTrayTemplate } = require("./tray/tray-menu");
+const { getSettingsHtml } = require("./settings/settings-window");
+const { loadSettings, saveSettings } = require("../server/utils/settings-store");
+const { validateHotkey } = require("./settings/settings-ipc");
+const { getTrayTitle } = require("./tray/tray-utils");
 
 let electron;
 try {
@@ -36,7 +36,7 @@ function getHotkey() {
 }
 
 function getIndexHtmlPath() {
-  return path.join(__dirname, "Index.html");
+  return path.join(__dirname, "../renderer/Index.html");
 }
 
 function buildServerEnv({ port, model, base }) {
@@ -74,7 +74,7 @@ function startServer({ port, model, base }) {
   }
   const appPath =
     app && typeof app.getAppPath === "function" ? app.getAppPath() : __dirname;
-  const serverPath = path.join(appPath, "server.js");
+  const serverPath = path.join(appPath, "src/server/server.js");
   serverProcess = fork(serverPath, [], { env, stdio: "inherit" });
 }
 
@@ -117,7 +117,7 @@ function createMainWindow() {
     resizable: false,
     backgroundColor: isLinux ? "#111111" : undefined,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "../renderer/preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
     },
@@ -141,12 +141,12 @@ function createSettingsWindow() {
     title: "Settings",
     titleBarStyle: "hidden",
     webPreferences: {
-      preload: path.join(__dirname, "settings-preload.js"),
+      preload: path.join(__dirname, "../renderer/settings-preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
-  settingsWindow.loadFile(path.join(__dirname, "settings.html"));
+  settingsWindow.loadFile(path.join(__dirname, "../renderer/components/settings.html"));
   settingsWindow.on("closed", () => {
     settingsWindow = null;
   });

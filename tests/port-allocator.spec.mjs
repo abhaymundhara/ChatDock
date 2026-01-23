@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { findAvailablePort } from '../port-allocator.js';
+import { findAvailablePort } from '../src/shared/port-allocator.js';
 
 test('finds next free port when start is in use', async () => {
   const server = net.createServer();
