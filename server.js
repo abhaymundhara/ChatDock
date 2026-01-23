@@ -8,7 +8,31 @@ const { execSync } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
-const MODEL = process.env.OLLAMA_MODEL || null;
+
+const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
+
+// Persist the last user-chosen model between runs
+const LAST_MODEL_PATH = path.join(__dirname, "last_model.txt");
+function loadLastModel() {
+  try {
+    const v = fs.readFileSync(LAST_MODEL_PATH, "utf-8").trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+function saveLastModel(name) {
+  try {
+    fs.writeFileSync(LAST_MODEL_PATH, String(name), "utf-8");
+  } catch (e) {
+    console.warn(
+      "[server] failed to persist last model:",
+      e?.message || String(e),
+    );
+  }
+}
+
+// The detectLatestLocalModel function has been removed as per the patch request.
 
 /* ===== Ollama model helpers ===== */
 const PULLING_MODELS = new Set();
@@ -77,9 +101,8 @@ app.post("/chat", async (req, res) => {
     const userMsg = String(req.body?.message ?? "");
     const chosenModel = req.body?.model
       ? String(req.body.model)
-      : MODEL
-        ? String(MODEL)
-        : null;
+      : loadLastModel();
+    if (req.body?.model) saveLastModel(req.body.model);
     if (!chosenModel) {
       try {
         const upstreamTags = await fetch(`${OLLAMA_BASE}/api/tags`, {
@@ -91,20 +114,16 @@ app.post("/chat", async (req, res) => {
         const models = Array.isArray(data.models)
           ? data.models.map((m) => m.name).filter(Boolean)
           : [];
-        return res
-          .status(400)
-          .json({
-            error:
-              "No model specified. Provide `model` in the request body or set OLLAMA_MODEL.",
-            availableModels: models,
-          });
+        return res.status(400).json({
+          error:
+            "No model specified. Provide `model` in the request body (it will be remembered for next run).",
+          availableModels: models,
+        });
       } catch (e) {
-        return res
-          .status(400)
-          .json({
-            error:
-              "No model specified and unable to fetch available models from Ollama.",
-          });
+        return res.status(400).json({
+          error:
+            "No model specified and unable to fetch available models from Ollama.",
+        });
       }
     }
     const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
@@ -165,14 +184,51 @@ app.post("/chat", async (req, res) => {
   if (port !== PORT) {
     process.env.CHAT_SERVER_PORT = String(port);
   }
-  http.createServer(app).listen(port, () => {
-    console.log(`[server] listening on http://127.0.0.1:${port}`);
-    if (MODEL) {
-      console.log(`[server] default model ${MODEL} at ${OLLAMA_BASE}`);
-    } else {
-      console.log(
-        "[server] no default model configured; requests must include a `model` field or set OLLAMA_MODEL",
-      );
+  // No auto-default model: we persist last user choice and use it when a request omits `model`.
+  const server = http.createServer(app);
+
+  // Try to listen on the chosen port; if it's in use, increment and retry.
+  let attemptPort = port;
+  const maxAttempts = 50;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve, reject) => {
+        const onError = (err) => {
+          server.removeListener("listening", onListen);
+          reject(err);
+        };
+        const onListen = () => {
+          server.removeListener("error", onError);
+          resolve();
+        };
+        server.once("error", onError);
+        server.once("listening", onListen);
+        server.listen(attemptPort);
+      });
+      // success
+      process.env.CHAT_SERVER_PORT = String(attemptPort);
+      console.log(`[server] listening on http://127.0.0.1:${attemptPort}`);
+      const last = loadLastModel();
+      if (last) {
+        console.log(`[server] last chosen model: ${last}`);
+      } else {
+        console.log(
+          "[server] no last model chosen; requests must include a `model` field",
+        );
+      }
+      break;
+    } catch (err) {
+      if (err && err.code === "EADDRINUSE") {
+        console.warn(
+          `[server] port ${attemptPort} in use, trying ${attemptPort + 1}`,
+        );
+        attemptPort += 1;
+        // continue loop to retry on next port
+      } else {
+        console.error("[server] failed to start server:", err);
+        process.exit(1);
+      }
     }
-  });
+  }
 })();

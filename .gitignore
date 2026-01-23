@@ -29,3 +29,4 @@ coverage/
 
 # Worktrees
 .worktrees/
+last_model.txt
