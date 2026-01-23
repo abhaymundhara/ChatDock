@@ -3,6 +3,7 @@ const { fork } = require("node:child_process");
 const { findAvailablePort } = require("./port-allocator");
 const { buildTrayTemplate } = require("./tray-menu");
 const { getSettingsHtml } = require("./settings-window");
+const { getTrayTitle } = require("./tray-utils");
 
 let electron;
 try {
@@ -146,6 +147,8 @@ function createTray({ serverUrl }) {
   }
   tray = new electron.Tray(icon);
   tray.setToolTip("ChatDock");
+  const trayTitle = getTrayTitle(process.platform);
+  if (trayTitle) tray.setTitle(trayTitle);
 
   const template = buildTrayTemplate({ serverUrl });
   const menu = electron.Menu.buildFromTemplate(template.map((item) => {
