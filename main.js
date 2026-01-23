@@ -19,6 +19,14 @@ const DEFAULT_BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434';
 let win;
 let serverProcess;
 
+function getHotkey() {
+  return 'CommandOrControl+Shift+Space';
+}
+
+function getIndexHtmlPath() {
+  return path.join(__dirname, 'Index.html');
+}
+
 function buildServerEnv({ port, model, base }) {
   return {
     ...process.env,
@@ -68,15 +76,17 @@ function showErrorWindow(message) {
 }
 
 function createMainWindow() {
+  const isLinux = process.platform === 'linux';
   win = new BrowserWindow({
     width: 700,
     height: 300,
     frame: false,
-    transparent: true,
+    transparent: !isLinux,
     alwaysOnTop: true,
     skipTaskbar: true,
     hasShadow: false,
     resizable: false,
+    backgroundColor: isLinux ? '#111111' : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -85,7 +95,7 @@ function createMainWindow() {
   });
 
   win.setIgnoreMouseEvents(false);
-  win.loadFile('index.html'); // Your floating chat bar HTML file
+  win.loadFile(getIndexHtmlPath()); // Your floating chat bar HTML file
 }
 
 async function boot() {
@@ -102,7 +112,7 @@ async function boot() {
   createMainWindow();
 
   // GLOBAL HOTKEY
-  globalShortcut.register('Control+Shift+Space', () => {
+  globalShortcut.register(getHotkey(), () => {
     if (win.isVisible()) {
       win.hide();
     } else {
@@ -123,4 +133,4 @@ if (app && typeof app.whenReady === 'function') {
   });
 }
 
-module.exports = { buildServerEnv };
+module.exports = { buildServerEnv, getHotkey, getIndexHtmlPath };
