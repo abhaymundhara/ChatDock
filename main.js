@@ -1,4 +1,5 @@
 const { app, BrowserWindow, globalShortcut } = require('electron');
+const path = require('node:path');
 let win;
 
 app.whenReady().then(() => {
@@ -12,8 +13,9 @@ app.whenReady().then(() => {
     hasShadow: false,
     resizable: false,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
     }
   });
 
