@@ -5,6 +5,7 @@ const cors = require('cors');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execSync } = require('node:child_process');
+const { shouldAutoPull } = require('./server-config');
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 const OLLAMA_BASE = process.env.OLLAMA_BASE || 'http://127.0.0.1:11434';
@@ -72,12 +73,14 @@ app.use(cors());
 app.use(express.json());
 
 
-/* Ensure default model is present (non-blocking) */
-ensureModel(MODEL).then((r) => {
-  if (r.pulled) console.log(`[ollama] default model ready: ${MODEL}`);
-}).catch(err => {
-  console.warn('[ollama] ensure model failed:', err?.message || String(err));
-});
+/* Optional auto-pull (disabled by default) */
+if (shouldAutoPull()) {
+  ensureModel(MODEL).then((r) => {
+    if (r.pulled) console.log(`[ollama] default model ready: ${MODEL}`);
+  }).catch(err => {
+    console.warn('[ollama] ensure model failed:', err?.message || String(err));
+  });
+}
 
 
 /* Health + model endpoints */

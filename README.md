@@ -1,52 +1,55 @@
 # ChatDock
 
-A minimal, floating, always-on-top AI chat interface designed to live on your desktop and stay out of the way while you work. Summon it via keyboard shortcut and fire off questions or commands directly to a local or cloud-based AI — without switching windows.
-
-The long-term goal is to run this chat bar fully locally using tools like [Ollama](https://ollama.com), with zero cloud dependencies — just fast, private AI access baked into the OS.
+A minimal, floating, always-on-top desktop chat bar for local AI. ChatDock uses Ollama models and launches its local server automatically, so you can ask questions without switching windows.
 
 ---
 
 ## 🚀 Features
 
 - Always-on-top floating chat bar UI
-- Clean, misty visual design with animated typing indicator
-- Message thread floats above the bar like a messaging app
-- Live prompt + response system via OpenAI API (for now)
-- Designed to evolve into a self-hosted AI tool
-- Can be called on top of any app on any screen with a global hotkey (CommandOrControl+Shift+Space)
+- Global hotkey toggle (CommandOrControl+Shift+Space)
+- Model picker powered by local Ollama models
+- Local, private inference (no cloud dependency)
+- Auto-starts the local server on app launch
 
 ---
 
 ## 🧱 Stack
 
+- Electron (desktop shell)
 - HTML/CSS/JS frontend
 - Node.js + Express backend
-- OpenAI API (current backend)
-- Ollama (local AI backend)
+- Ollama (local model runtime)
 
 ---
 
+## ✅ Prerequisites
 
-### Prerequisites
+- [Ollama](https://ollama.com) installed and running
 - [Node.js](https://nodejs.org/) (v18+ recommended)
 - [npm](https://www.npmjs.com/)
-- [Ollama](https://ollama.com) for running local models
 
-### Installation
+---
+
+## 📦 Installation
 
 ```bash
-git clone https://github.com/your-username/ChatDock.git
+git clone https://github.com/abhaymundhara/ChatDock.git
 cd ChatDock
 npm install
 ```
 
-### Development
+---
+
+## 🧪 Development
 
 ```bash
 npm run dev   # Starts server + Electron together
 ```
 
-### Production (Packaged Builds)
+---
+
+## 🏗️ Production (Packaged Builds)
 
 ```bash
 npm run build   # Builds installers for your current OS
@@ -62,7 +65,7 @@ Environment variables can be set in a `.env` file:
 
 ```bash
 OLLAMA_BASE=http://127.0.0.1:11434
-OLLAMA_MODEL=gemma2:2b # (recommended)
+OLLAMA_MODEL=gemma2:2b
 CHAT_SERVER_PORT=3001
 ```
 
@@ -71,8 +74,6 @@ CHAT_SERVER_PORT=3001
 ## 📖 Roadmap
 
 - [ ] Realtime screen context aware sessions
-- [ ] Compute use capabilities
-- [ ] Browser Use(more of agentic path)
 - [ ] Multi-chat sessions
 - [ ] Rich message formatting
 - [ ] Auto-updates
@@ -89,10 +90,7 @@ Contributions are welcome! To get started:
 4. Push to your branch (`git push origin feature/your-feature`)
 5. Open a Pull Request
 
-Please ensure all PRs are well-documented and tested. Bug reports, feature requests, and discussions are encouraged via the [Issues](../../issues) tab.
-
-I'm not that familiar with github contributions and stuff so please if you're interested to connect and discuss further about the project please do!
-My discord is - abhay066841
+If you want to chat about the project, feel free to reach out on Discord: **abhay066841**.
 
 ---
 
@@ -104,5 +102,5 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## 🙌 Acknowledgements
 
-- [Ollama](https://ollama.com) for model APIs
+- [Ollama](https://ollama.com) for local model APIs
 - The open-source community for inspiration and tools
