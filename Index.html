@@ -375,7 +375,9 @@
 <script>
 // === CONFIGURATION ===
 const useAI = true;
-const CHAT_ENDPOINT = 'http://127.0.0.1:3001/chat';
+const CHAT_BASE = (window.__CHAT_BASE__ && window.__CHAT_BASE__.get && window.__CHAT_BASE__.get()) || 'http://127.0.0.1:3001';
+const CHAT_ENDPOINT = `${CHAT_BASE}/chat`;
+const MODELS_ENDPOINT = `${CHAT_BASE}/models`;
 
 // === UI COMPONENT HOOKS ===
 const input = document.getElementById('chatInput');
@@ -572,7 +574,7 @@ async function handleSubmit(text) {
 // === MODEL PICKER LOGIC ===
 async function initModels() {
   try {
-    const r = await fetch('http://127.0.0.1:3001/models');
+    const r = await fetch(MODELS_ENDPOINT);
     const data = await r.json();
     const models = Array.isArray(data.models) ? data.models : [];
     const preferred = localStorage.getItem('preferred_model');
