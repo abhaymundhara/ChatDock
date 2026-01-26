@@ -5,11 +5,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { execSync } = require('node:child_process');
 
 // File registry for tracking uploaded/processed files
 const fileRegistry = new Map();
-const REGISTRY_PATH = path.join(process.env.HOME || '', '.chatdock', 'files', 'registry.json');
+const REGISTRY_PATH = path.join(os.homedir(), '.chatdock', 'files', 'registry.json');
 
 /**
  * Initialize registry from disk

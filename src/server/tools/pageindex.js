@@ -5,10 +5,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const { execSync } = require('node:child_process');
 
 // PageIndex storage
-const INDEX_DIR = path.join(process.env.HOME || '', '.chatdock', 'pageindex');
+const INDEX_DIR = path.join(os.homedir(), '.chatdock', 'pageindex');
 const indexes = new Map();
 
 /**
