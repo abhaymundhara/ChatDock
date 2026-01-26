@@ -13,12 +13,16 @@ const { loadSettings } = require("./utils/settings-store");
 const { getServerConfig } = require("./utils/server-config");
 const { createAuthMiddleware } = require("./utils/auth");
 const { ConfirmationStore } = require("./utils/confirmation-store");
+const { MemoryManager } = require("./utils/memory-manager");
+const { setMemoryManager } = require("./tools/memory");
 const { Orchestrator, OllamaClient, ToolRegistry, SkillLoader, PromptBuilder } = require("./orchestrator");
 
-const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH } =
+const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH, appPath: APP_PATH } =
   getServerConfig();
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 const confirmationStore = new ConfirmationStore();
+const memoryManager = new MemoryManager({ appPath: APP_PATH });
+setMemoryManager(memoryManager);
 
 // ===== Model Persistence =====
 
@@ -48,6 +52,7 @@ const orchestrator = new Orchestrator({
     baseUrl: OLLAMA_BASE,
     model: loadLastModel() || 'nemotron-3-nano:30b'
   }),
+  memoryManager,
   onStateChange: ({ from, to }) => {
     console.log(`[orchestrator] ${from} -> ${to}`);
   },

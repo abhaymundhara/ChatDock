@@ -58,6 +58,16 @@ describe('Search Tools', () => {
     });
   });
 
+  describe('memory tools', () => {
+    it('should be exposed via registry', async () => {
+      const registry = new ToolRegistry();
+      await registry.discover();
+      const defs = registry.getDefinitions().map(def => def.name);
+      assert.ok(defs.includes('memory_save'));
+      assert.ok(defs.includes('memory_search'));
+    });
+  });
+
   describe('web_search', () => {
     it('should return search results object', async () => {
       // This may fail without network/ddgr, so just check structure
