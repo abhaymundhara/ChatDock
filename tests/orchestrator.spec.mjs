@@ -121,6 +121,12 @@ describe('PromptBuilder', () => {
     assert.ok(prompt.includes('ChatDock'));
   });
 
+  it('prompt references task_write for planning', () => {
+    const prompt = builder.build();
+    assert.ok(prompt.includes('task_write'));
+    assert.ok(!prompt.includes('todo_write'));
+  });
+
   it('should include tools in prompt', () => {
     const prompt = builder.build({
       tools: [{ name: 'test', description: 'test tool', parameters: {} }]

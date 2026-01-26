@@ -10,7 +10,7 @@ For any request complex than "hello":
     -   *Example*: `think({ problem: "User wants to refactor auth", depth: "balanced" })`
 2.  **DISCOVER**: If you need new capabilities, use `tool_search`.
     -   *Example*: `tool_search({ query: "database tools" })`
-3.  **PLAN**: Creating a `todo_write` list helps you track multi-step complex tasks.
+3.  **PLAN**: Creating a `task_write` list helps you track multi-step complex tasks.
 
 ### 2. Interception Protocol
 If the system intercepts you (e.g., "STOP: You are violating protocol"):

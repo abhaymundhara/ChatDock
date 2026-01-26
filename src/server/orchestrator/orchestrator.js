@@ -256,7 +256,7 @@ class Orchestrator {
           // ENFORCE PLANNING: First iteration must create a plan for complex tasks
           if (this.loopIteration === 1 && requiresPlanning && !hasPlan) {
             const firstTool = response.tool_calls[0].function.name;
-            const planningTools = ["todo_write", "think", "ask_user"];
+            const planningTools = ["task_write", "think", "ask_user"];
 
             if (!planningTools.includes(firstTool)) {
               console.log(
@@ -278,7 +278,7 @@ The user asked: "${userMessage}"
 You attempted to directly execute: ${firstTool}
 
 REQUIRED ACTION: Use one of these planning tools first:
-1. todo_write({ tasks: [...] }) - Create a structured task list
+1. task_write({ tasks: [...] }) - Create a structured task list
 2. think({ problem: "...", depth: "balanced" }) - Think through the approach
 
 After planning, you can proceed with execution.`,
@@ -291,12 +291,12 @@ After planning, you can proceed with execution.`,
 
           // Track if a plan was created
           const isPlanningCall = response.tool_calls.some((tc) =>
-            ["todo_write", "think"].includes(tc.function.name),
+            ["task_write", "think"].includes(tc.function.name),
           );
           if (isPlanningCall) {
             hasPlan = true;
             console.log(
-              `[orchestrator] 📋 PLAN CREATED via ${response.tool_calls.find((tc) => ["todo_write", "think"].includes(tc.function.name)).function.name}`,
+              `[orchestrator] 📋 PLAN CREATED via ${response.tool_calls.find((tc) => ["task_write", "think"].includes(tc.function.name)).function.name}`,
             );
           }
 
@@ -484,9 +484,9 @@ After planning, you can proceed with execution.`,
    * Execute tool calls and observe results
    */
   async *executePlanPhase(toolCalls) {
-    // Check if this is a planning tool (todo_write, think, etc.)
+    // Check if this is a planning tool (task_write, think, etc.)
     const isPlanningTool = toolCalls.some((tc) =>
-      ["todo_write", "think", "tool_search"].includes(tc.function.name),
+      ["task_write", "think", "tool_search"].includes(tc.function.name),
     );
 
     if (isPlanningTool) {
@@ -581,6 +581,16 @@ After planning, you can proceed with execution.`,
         type: "tool_result",
         data: { name: toolCall.function.name, result },
       };
+
+      if (toolCall.function.name.startsWith("task_")) {
+        const taskPayload = result?.plan || result;
+        if (taskPayload && taskPayload.tasks) {
+          yield {
+            type: "tasks",
+            data: taskPayload,
+          };
+        }
+      }
 
       // Add tool result to conversation
       this.conversationHistory.push({
@@ -773,7 +783,7 @@ Just respond naturally with the information from the tool results or your knowle
 ### Planning Requirements
 
 For complex tasks (multiple steps, file operations, system changes):
-- First iteration: Use \`think\` or \`todo_write\` to create a plan
+- First iteration: Use \`think\` or \`task_write\` to create a plan
 - Do NOT jump directly to execution
 - Break down the task into clear, sequential steps
 
