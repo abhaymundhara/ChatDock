@@ -65,7 +65,10 @@
 
       <!-- Expanded Content -->
       <div class="expanded-content" id="expandedList">
-        <!-- Dynamic Content Here -->
+        <div class="tasks-strip" id="tasksStrip" style="display: none">
+          <div class="tasks-list" id="tasksList"></div>
+        </div>
+        <div class="messages-list" id="messagesList"></div>
       </div>
     </div>
 
@@ -86,6 +89,9 @@
       const aceBar = document.getElementById("aceBar");
       const chatInput = document.getElementById("chatInput");
       const expandedList = document.getElementById("expandedList");
+      const messagesList = document.getElementById("messagesList");
+      const tasksStrip = document.getElementById("tasksStrip");
+      const tasksList = document.getElementById("tasksList");
       const mainIcon = document.getElementById("mainIcon");
       const statusBadge = document.getElementById("statusBadge");
       const settingsBtn = document.getElementById("settingsBtn");
@@ -96,6 +102,8 @@
       let currentModels = [];
       let currentModel = "";
       let selectedCommandIndex = 0;
+      let currentTasks = [];
+      let currentDependencies = {};
 
       // ===== Available Commands =====
       const COMMANDS = [
@@ -154,6 +162,132 @@
         } else {
           aceBar.classList.remove("expanded");
         }
+      }
+
+      const TASK_STATUSES = ["pending", "in_progress", "blocked", "completed"];
+      const TASK_STATUS_ICONS = {
+        pending: "○",
+        in_progress: "◐",
+        blocked: "⚠",
+        completed: "✓",
+      };
+
+      function hasTasks() {
+        return currentTasks.length > 0;
+      }
+
+      function updateTaskState(taskId, updates) {
+        const idx = currentTasks.findIndex((task) => task.id === taskId);
+        if (idx === -1) return;
+        currentTasks[idx] = { ...currentTasks[idx], ...updates };
+      }
+
+      async function persistTaskUpdate(task, row) {
+        try {
+          const res = await fetch(`${CHAT_BASE}/tools/execute`, {
+            method: "POST",
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: "task_write",
+              params: { mode: "append", tasks: [task] },
+            }),
+          });
+
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data?.error) {
+            throw new Error(data?.error || `Server error: ${res.status}`);
+          }
+          row?.classList.remove("task-error");
+          return true;
+        } catch (err) {
+          if (row) {
+            row.classList.add("task-error");
+            setTimeout(() => row.classList.remove("task-error"), 2000);
+          }
+          console.error("Failed to save task:", err);
+          return false;
+        }
+      }
+
+      function renderTasks() {
+        if (!hasTasks()) {
+          tasksStrip.style.display = "none";
+          return;
+        }
+
+        tasksStrip.style.display = "block";
+        tasksList.innerHTML = "";
+
+        currentTasks.forEach((task) => {
+          const dependsOn =
+            task.dependsOn || currentDependencies[task.id] || [];
+          const status = task.status || "pending";
+          const title = task.task || task.title || "";
+
+          const row = document.createElement("div");
+          row.className = "task-row";
+          row.dataset.taskId = task.id;
+
+          const statusBtn = document.createElement("button");
+          statusBtn.className = `task-status status-${status}`;
+          statusBtn.dataset.status = status;
+          statusBtn.type = "button";
+          statusBtn.title = status.replace("_", " ");
+          statusBtn.textContent = TASK_STATUS_ICONS[status] || "○";
+
+          statusBtn.addEventListener("click", async () => {
+            const currentStatus = statusBtn.dataset.status || "pending";
+            const currentIndex = TASK_STATUSES.indexOf(currentStatus);
+            const nextStatus =
+              TASK_STATUSES[(currentIndex + 1) % TASK_STATUSES.length];
+            updateTaskState(task.id, { status: nextStatus });
+            statusBtn.className = `task-status status-${nextStatus}`;
+            statusBtn.textContent = TASK_STATUS_ICONS[nextStatus];
+            statusBtn.title = nextStatus.replace("_", " ");
+            statusBtn.dataset.status = nextStatus;
+            await persistTaskUpdate(
+              { id: task.id, status: nextStatus },
+              row,
+            );
+          });
+
+          const titleEl = document.createElement("div");
+          titleEl.className = "task-title";
+          titleEl.textContent = title;
+          titleEl.dataset.original = title;
+          titleEl.contentEditable = "true";
+          titleEl.spellcheck = false;
+
+          titleEl.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              titleEl.blur();
+            }
+          });
+
+          titleEl.addEventListener("blur", async () => {
+            const nextTitle = titleEl.textContent.trim();
+            if (!nextTitle || nextTitle === titleEl.dataset.original) return;
+            updateTaskState(task.id, { task: nextTitle });
+            await persistTaskUpdate({ id: task.id, task: nextTitle }, row);
+            titleEl.dataset.original = nextTitle;
+          });
+
+          const depsEl = document.createElement("div");
+          depsEl.className = "task-deps";
+          if (dependsOn.length > 0) {
+            depsEl.textContent = `↳ ${dependsOn.length} deps`;
+          } else {
+            depsEl.style.display = "none";
+          }
+
+          row.appendChild(statusBtn);
+          row.appendChild(titleEl);
+          row.appendChild(depsEl);
+          tasksList.appendChild(row);
+        });
+
+        expand(true);
       }
 
       function showCommandPalette(filter = "") {
@@ -255,11 +389,11 @@
             // Update UI
             chatInput.value = "";
             hideCommandPalette();
-            expandedList.innerHTML = "";
+            messagesList.innerHTML = "";
             addMessage(`Switched to model: ${selectedModel}`, "assistant");
 
             setTimeout(() => {
-              expandedList.innerHTML = "";
+              messagesList.innerHTML = "";
               expand(false);
             }, 2000);
           });
@@ -283,7 +417,7 @@
         <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
         <span>Running ${name}...</span>
       `;
-        expandedList.insertBefore(item, expandedList.firstChild);
+        messagesList.insertBefore(item, messagesList.firstChild);
         return item;
       }
 
@@ -343,7 +477,7 @@
         }
 
         msg.innerHTML = `<div class="message-content">${safe}</div>`;
-        expandedList.appendChild(msg);
+        messagesList.appendChild(msg);
         expandedList.scrollTop = expandedList.scrollHeight;
       }
 
@@ -375,7 +509,7 @@
             });
             const data = await res.json();
             expand(true);
-            expandedList.innerHTML = "";
+            messagesList.innerHTML = "";
             addMessage(
               `Available tools (${data.count}):\n\n${data.tools
                 .slice(0, 20)
@@ -398,7 +532,7 @@
             });
             const data = await res.json();
             expand(true);
-            expandedList.innerHTML = "";
+            messagesList.innerHTML = "";
             addMessage(
               `Available skills (${data.count}):\n\n${data.skills.map((s) => `• ${s.name}: ${s.description}`).join("\n")}`,
               "assistant",
@@ -410,14 +544,14 @@
         }
 
         if (command === "clear") {
-          expandedList.innerHTML = "";
+          messagesList.innerHTML = "";
           expand(false);
           return true;
         }
 
         if (command === "help") {
           expand(true);
-          expandedList.innerHTML = "";
+          messagesList.innerHTML = "";
           addMessage(
             `Available commands:\n\n/model - Switch AI model\n/tools - List available tools\n/skills - List available skills\n/clear - Clear conversation\n/help - Show this help`,
             "assistant",
@@ -442,8 +576,12 @@
         }
 
         setThinking(true);
-        expandedList.innerHTML = "";
-        expand(false);
+        messagesList.innerHTML = "";
+        if (!hasTasks()) {
+          expand(false);
+        } else {
+          expand(true);
+        }
         hideCommandPalette();
 
         chatInput.value = "";
@@ -498,6 +636,10 @@
                 } else if (event.type === "tool_result") {
                   // Tool completed - just log to console for debug
                   console.log("Tool result:", event.data);
+                } else if (event.type === "tasks") {
+                  currentTasks = event.data?.tasks || [];
+                  currentDependencies = event.data?.dependencies || {};
+                  renderTasks();
                 } else if (
                   event.type === "response" ||
                   event.type === "content"
@@ -535,7 +677,7 @@
           }
 
           // If no response was shown, show a default message
-          if (expandedList.children.length === 0) {
+          if (messagesList.children.length === 0) {
             addMessage("Task completed.", "assistant");
           }
         } catch (e) {
