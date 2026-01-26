@@ -74,3 +74,17 @@ test("task_read migrates current_plan.json when tasks file is missing", async ()
   assert.equal(migrated.title, "Legacy");
   assert.equal(migrated.tasks.length, 1);
 });
+
+test("task_write accepts JSON string tasks", async () => {
+  const tempDir = createTempDir();
+  process.env.CHATDOCK_USER_DATA = tempDir;
+  const { task_write } = await loadPlanningModule();
+  const result = await task_write.run({
+    title: "Plan",
+    tasks: '["First","Second"]',
+  });
+
+  assert.equal(result.tasks.length, 2);
+  assert.equal(result.tasks[0].task, "First");
+  assert.equal(result.tasks[1].task, "Second");
+});

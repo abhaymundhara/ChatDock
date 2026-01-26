@@ -49,6 +49,35 @@ function normalizeTask(input, index, existing = null) {
   };
 }
 
+function normalizeTasksInput(tasks) {
+  let nextTasks = tasks;
+
+  if (typeof nextTasks === "string") {
+    try {
+      nextTasks = JSON.parse(nextTasks);
+    } catch {
+      // Leave as-is to raise a clearer error below
+    }
+  }
+
+  if (
+    nextTasks &&
+    !Array.isArray(nextTasks) &&
+    typeof nextTasks === "object" &&
+    Array.isArray(nextTasks.tasks)
+  ) {
+    nextTasks = nextTasks.tasks;
+  }
+
+  if (!Array.isArray(nextTasks)) {
+    throw new Error("tasks must be an array");
+  }
+
+  return nextTasks.map((task) =>
+    typeof task === "string" ? { task } : task,
+  );
+}
+
 function loadTasksFromDisk() {
   const tasksFile = getTasksFile();
   if (fs.existsSync(tasksFile)) {
@@ -126,6 +155,7 @@ const task_write = {
   keywords: ["task", "plan", "list", "organize"],
 
   run: async ({ title, tasks, mode = "replace" }) => {
+    const normalizedTasksInput = normalizeTasksInput(tasks);
     const tasksDir = getTasksDir();
     if (currentTasksDir && currentTasksDir !== tasksDir) {
       currentTasks = null;
@@ -140,7 +170,7 @@ const task_write = {
         currentTasks.tasks.map((task) => [task.id, task]),
       );
       let nextId = currentTasks.tasks.length + 1;
-      tasks.forEach((taskInput, index) => {
+      normalizedTasksInput.forEach((taskInput, index) => {
         const inputWithId = taskInput.id
           ? taskInput
           : { ...taskInput, id: `task_${nextId++}` };
@@ -165,7 +195,7 @@ const task_write = {
       };
       currentTasksDir = tasksDir;
     } else {
-      const normalized = tasks.map((taskInput, index) =>
+      const normalized = normalizedTasksInput.map((taskInput, index) =>
         normalizeTask(taskInput, index),
       );
       currentTasks = {
