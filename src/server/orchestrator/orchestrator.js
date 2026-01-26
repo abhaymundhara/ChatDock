@@ -253,10 +253,11 @@ class Orchestrator {
 
         // Check if response has tool calls
         if (response.tool_calls && response.tool_calls.length > 0) {
-          const violation = this.getWorkflowViolation(response.tool_calls, {
-            hasTaskPlan,
-            hasToolFinder,
-          });
+          const violation = this.getWorkflowViolation(
+            response.tool_calls,
+            { hasTaskPlan, hasToolFinder },
+            userMessage, // Pass userMessage to check complexity
+          );
 
           if (violation) {
             const firstTool = response.tool_calls[0].function.name;
@@ -353,32 +354,64 @@ class Orchestrator {
   }
 
   /**
-   * Detect if a task is complex and requires planning
+   * Detect if a task is complex and requires planning (Claude Cowork-style)
    * @param {string} userMessage
    * @returns {boolean}
    */
   detectComplexTask(userMessage) {
-    // URLs are simple - just fetch and summarize
-    if (this.extractUrls(userMessage).length > 0) {
-      console.log(`[orchestrator] ✓ URL detected - skipping planning`);
+    const msg = userMessage.toLowerCase();
+    const matchesAny = (patterns) => patterns.some((p) => p.test(msg));
+
+    // Simple queries: questions, info requests, greetings, URLs
+    const simplePatterns = [
+      /^(what|who|when|where|why|how)\s/i,
+      /^(tell me|show me|explain|describe)\s/i,
+      /^(list|display|view)\s/i,
+      /\b(hello|hi|hey|thanks|thank you)\b/i,
+    ];
+
+    if (
+      matchesAny(simplePatterns) ||
+      this.extractUrls(userMessage).length > 0
+    ) {
+      console.log(`[orchestrator] ✓ Simple query - skipping tasks`);
       return false;
     }
 
-    console.log(`[orchestrator] ✓ Planning required by policy`);
-    return true;
+    // Complex indicators: code work, debugging, features, analysis
+    const complexPatterns = [
+      /\b(create|build|implement|refactor|migrate)\b/i,
+      /\b(fix|debug|solve|resolve)\b.{0,20}\b(bug|issue|error|problem)\b/i,
+      /\b(add|remove|update|modify|change).{0,20}\b(feature|functionality|component)\b/i,
+      /\b(test|analyze|research|investigate)\b/i,
+      /\band\b.*\band\b/i,
+      /\bthen\b/i,
+      /\d+[\.\)]\s/,
+    ];
+
+    const isComplex =
+      matchesAny(complexPatterns) || userMessage.split(/\s+/).length > 20;
+    console.log(
+      `[orchestrator] ✓ ${isComplex ? "Complex task - tasks required" : "Simple task - skipping tasks"}`,
+    );
+    return isComplex;
   }
 
   /**
-   * Validate tool call order for enforced workflow.
+   * Validate tool call order for enforced workflow (Claude Cowork-style).
+   * Only enforces tasks for complex multi-step work.
    * @param {Array} toolCalls
    * @param {{ hasTaskPlan: boolean, hasToolFinder: boolean }} state
+   * @param {string} userMessage - Original user message to check complexity
    * @returns {{ type: string, message: string } | null}
    */
-  getWorkflowViolation(toolCalls, { hasTaskPlan, hasToolFinder }) {
+  getWorkflowViolation(
+    toolCalls,
+    { hasTaskPlan, hasToolFinder },
+    userMessage = "",
+  ) {
     const planningTools = new Set(["task_write", "think", "ask_user"]);
-    const toolNames = toolCalls
-      .map((tc) => tc?.function?.name)
-      .filter(Boolean);
+    const toolNames = toolCalls.map((tc) => tc?.function?.name).filter(Boolean);
 
     const hasTaskWrite = toolNames.includes("task_write");
     const hasToolFinderCall = toolNames.includes("tool_finder");
@@ -386,13 +419,23 @@ class Orchestrator {
       (name) => !planningTools.has(name) && name !== "tool_finder",
     );
 
-    if (!hasTaskPlan) {
+    // Check if this is actually a complex task that needs planning
+    const needsTasks = this.detectComplexTask(userMessage);
+
+    // COMPLEX TASKS: Enforce task_write first
+    if (!hasTaskPlan && needsTasks) {
       if (!hasTaskWrite) {
         return {
           type: "task_write_required",
-          message: `STOP: You must create tasks before any tool usage.
+          message: `STOP: This is a complex task that requires planning.
 
-REQUIRED ACTION: Call task_write({ tasks: [...] }) to create the task list.
+REQUIRED ACTION: Call task_write({ tasks: [...] }) to create specific, actionable tasks.
+Example: task_write({ title: "Fix Login Bug", tasks: [
+  { id: "1", task: "Reproduce the bug in dev environment" },
+  { id: "2", task: "Identify root cause in auth.js" },
+  { id: "3", task: "Implement fix with proper error handling" }
+]})
+
 After tasks are created, call tool_finder if tools are needed.`,
         };
       }
@@ -409,17 +452,39 @@ REQUIRED ACTION: Call task_write({ tasks: [...] }) only. Do not use other tools 
       return null;
     }
 
-    if (!hasToolFinder) {
-      if (hasNonPlanning && !hasToolFinderCall) {
+    // BOTH SIMPLE & COMPLEX: Always enforce tool_finder before other tools
+    if (!hasToolFinder && hasNonPlanning) {
+      if (!hasToolFinderCall) {
+        // Suggest a better query based on attempted tool
+        const attemptedTool = toolNames.find(
+          (name) => !planningTools.has(name) && name !== "tool_finder",
+        );
+
+        // Smart query suggestions based on tool category
+        const querySuggestions = [
+          { keywords: ["search", "web"], query: "search web news" },
+          { keywords: ["file", "read", "write"], query: "file operations" },
+          { keywords: ["command", "shell", "run"], query: "run commands" },
+          { keywords: ["open", "app"], query: "open application" },
+        ];
+
+        const suggestion = querySuggestions.find((s) =>
+          s.keywords.some((kw) => attemptedTool?.includes(kw)),
+        );
+        const suggestedQuery = suggestion?.query || "appropriate tools";
+
         return {
           type: "tool_finder_required",
-          message: `STOP: You must call tool_finder before using other tools.
+          message: `STOP: You must call tool_finder before using "${attemptedTool || "tools"}".
 
-REQUIRED ACTION: Call tool_finder({ query: "..." }) first.`,
+REQUIRED ACTION: Call tool_finder({ query: "${suggestedQuery}" }) first to discover the right tool.
+
+The user asked: "${userMessage.substring(0, 100)}..."
+Find the appropriate tool for this request.`,
         };
       }
 
-      if (hasNonPlanning && hasToolFinderCall) {
+      if (hasToolFinderCall) {
         return {
           type: "tool_finder_only",
           message: `STOP: Tool discovery must happen before any execution.
@@ -559,12 +624,43 @@ REQUIRED ACTION: Call tool_finder({ query: "..." }) only. Do not execute other t
         data: { name: toolCall.function.name, result },
       };
 
+      // Enhanced task streaming (Claude Cowork-style)
       if (toolCall.function.name.startsWith("task_")) {
         const taskPayload = result?.plan || result;
         if (taskPayload && taskPayload.tasks) {
+          // Find current in-progress task for visibility
+          const inProgressTask = taskPayload.tasks.find(
+            (t) => t.status === "in_progress",
+          );
+          const completedCount = taskPayload.tasks.filter(
+            (t) => t.status === "completed",
+          ).length;
+          const totalCount = taskPayload.tasks.length;
+
           yield {
             type: "tasks",
-            data: taskPayload,
+            data: {
+              ...taskPayload,
+              currentTask: inProgressTask || null,
+              progress: {
+                completed: completedCount,
+                total: totalCount,
+                percentage: Math.round((completedCount / totalCount) * 100),
+              },
+            },
+          };
+        }
+
+        // If this was a task_update, also emit a specific status change event
+        if (toolCall.function.name === "task_update" && result?.updated) {
+          yield {
+            type: "task_status_change",
+            data: {
+              taskId: result.updated,
+              oldStatus: result.oldStatus,
+              newStatus: result.newStatus,
+              timestamp: new Date().toISOString(),
+            },
           };
         }
       }

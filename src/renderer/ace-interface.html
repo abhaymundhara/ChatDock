@@ -253,7 +253,10 @@
         try {
           const res = await fetch(`${CHAT_BASE}/tools/execute`, {
             method: "POST",
-            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            headers: {
+              ...getAuthHeaders(),
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({
               name: "task_write",
               params: { mode: "append", tasks: [task] },
@@ -285,6 +288,26 @@
         tasksStrip.style.display = "block";
         tasksList.innerHTML = "";
 
+        // Calculate progress (Claude Cowork-style visibility)
+        const completedCount = currentTasks.filter(
+          (t) => t.status === "completed",
+        ).length;
+        const totalCount = currentTasks.length;
+        const inProgressTask = currentTasks.find(
+          (t) => t.status === "in_progress",
+        );
+
+        // Add progress indicator if we have tasks
+        if (totalCount > 0) {
+          const progressBar = document.createElement("div");
+          progressBar.className = "task-progress-bar";
+          progressBar.innerHTML = `
+            <div class="task-progress-fill" style="width: ${(completedCount / totalCount) * 100}%"></div>
+            <div class="task-progress-text">${completedCount}/${totalCount} completed</div>
+          `;
+          tasksList.appendChild(progressBar);
+        }
+
         currentTasks.forEach((task) => {
           const dependsOn =
             task.dependsOn || currentDependencies[task.id] || [];
@@ -294,6 +317,11 @@
           const row = document.createElement("div");
           row.className = "task-row";
           row.dataset.taskId = task.id;
+
+          // Highlight in-progress task prominently (Claude Cowork-style)
+          if (status === "in_progress") {
+            row.classList.add("task-active");
+          }
 
           const statusBtn = document.createElement("button");
           statusBtn.className = `task-status status-${status}`;
@@ -312,10 +340,7 @@
             statusBtn.textContent = TASK_STATUS_ICONS[nextStatus];
             statusBtn.title = nextStatus.replace("_", " ");
             statusBtn.dataset.status = nextStatus;
-            await persistTaskUpdate(
-              { id: task.id, status: nextStatus },
-              row,
-            );
+            await persistTaskUpdate({ id: task.id, status: nextStatus }, row);
           });
 
           const titleEl = document.createElement("div");
@@ -446,7 +471,10 @@
             try {
               await fetch(`${CHAT_BASE}/models/selected`, {
                 method: "POST",
-                headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+                headers: {
+                  ...getAuthHeaders(),
+                  "Content-Type": "application/json",
+                },
                 body: JSON.stringify({ model: selectedModel }),
               });
             } catch (e) {
@@ -659,7 +687,10 @@
           // Use the agentic endpoint with tool calling
           const response = await fetch(`${CHAT_BASE}/chat/agent`, {
             method: "POST",
-            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            headers: {
+              ...getAuthHeaders(),
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({ message: text, model: currentModel }),
           });
 
