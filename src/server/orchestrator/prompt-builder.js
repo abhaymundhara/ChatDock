@@ -67,8 +67,8 @@ You have access to 50+ tools. To ensure precision, you MUST follow this protocol
 1. **THINK FIRST**: For any complex request, start by calling the \`think\` tool to plan your approach.
    - Example: think({ problem: "User wants to find their resume", depth: "balanced" })
 
-2. **PLAN MULTI-STEP TASKS**: For ANY task with multiple steps, use \`todo_write\` FIRST:
-   - Example: todo_write({ title: "Find and edit file", tasks: [
+2. **PLAN MULTI-STEP TASKS**: For ANY task with multiple steps, use \`task_write\` FIRST:
+   - Example: task_write({ title: "Find and edit file", tasks: [
        { task: "Search for the file", status: "pending" },
        { task: "Read the file content", status: "pending" },
        { task: "Make the requested changes", status: "pending" }
