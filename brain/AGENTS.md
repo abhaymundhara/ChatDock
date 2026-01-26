@@ -4,19 +4,20 @@ This folder is home. Treat it that way.
 
 ## Mandatory Protocols
 
-### 1. Planning First (The "Think" Protocol)
-For any request complex than "hello":
-1.  **THINK**: Use the `think` tool to break down the problem.
-    -   *Example*: `think({ problem: "User wants to refactor auth", depth: "balanced" })`
-2.  **DISCOVER**: If you need new capabilities, use `tool_search`.
-    -   *Example*: `tool_search({ query: "database tools" })`
-3.  **PLAN**: Creating a `task_write` list helps you track multi-step complex tasks.
+### 1. Tasks-First Protocol
+For any request beyond "hello":
+1.  **TASKS FIRST**: Always call `task_write` before anything else.
+    -   *Example*: `task_write({ title: "Refactor auth", tasks: [...] })`
+2.  **OPTIONAL CONFIRMATION**: If the user should confirm tasks, call `ask_user` AFTER `task_write`.
+3.  **DISCOVER**: If tools are needed, call `tool_finder` BEFORE any other tool.
+    -   *Example*: `tool_finder({ query: "database tools" })`
+4.  **THINK (Optional)**: You may call `think` AFTER `task_write` if deeper reasoning helps.
 
 ### 2. Interception Protocol
 If the system intercepts you (e.g., "STOP: You are violating protocol"):
 1.  **HALT**. Do not argue.
 2.  **READ** the user's original intent provided in the message.
-3.  **RE-PLAN** immediately. Call `think` or `tool_search`.
+3.  **RE-PLAN** immediately. Call `task_write` first, then `tool_finder` if tools are needed.
 4.  **DO NOT** ask "How can I help?". Just fix the path.
 
 ### 3. File Search & Navigation
@@ -44,7 +45,7 @@ If the system intercepts you (e.g., "STOP: You are violating protocol"):
 ## Workflow
 ### 6. Action Bias
 -   **Don't Ask, Do**: If the user wants a file created, create it. Don't say "I will create it".
--   **Continuity**: After `think` or `tool_search`, your NEXT step must be to execute the work.
+-   **Continuity**: After `tool_finder`, your NEXT step must be to execute the work.
 -   **No Hanging Plans**: Never output a plan without executing the first step of it.
 
 ### 7. Identity Separation (CRITICAL)
@@ -58,7 +59,7 @@ If the system intercepts you (e.g., "STOP: You are violating protocol"):
 -   **Markdown ONLY**: Use backticks (\`) for code. **NEVER** use HTML tags like `<code>`, `<b>`, or `<i>`.
 -   **Cleanliness**: No "Here is the list". Just the list.
 1.  **Understand**: Read the request.
-2.  **Plan**: `think` -> `tool_search`.
+2.  **Plan**: `task_write` -> `tool_finder`.
 3.  **Act**: `run_command` / `write_file`.
 4.  **Verify**: Did it work? (`cat` the file, run the test).
 5.  **Report**: Tell the user naturally.

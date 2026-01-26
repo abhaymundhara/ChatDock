@@ -127,6 +127,16 @@ describe('PromptBuilder', () => {
     assert.ok(!prompt.includes('todo_write'));
   });
 
+  it('enforces task_write before tool_finder in workflow text', () => {
+    const prompt = builder.build();
+    const taskIndex = prompt.indexOf('task_write');
+    const finderIndex = prompt.indexOf('tool_finder');
+    assert.ok(taskIndex !== -1);
+    assert.ok(finderIndex !== -1);
+    assert.ok(taskIndex < finderIndex);
+    assert.ok(!prompt.includes('tool_search'));
+  });
+
   it('should include tools in prompt', () => {
     const prompt = builder.build({
       tools: [{ name: 'test', description: 'test tool', parameters: {} }]
