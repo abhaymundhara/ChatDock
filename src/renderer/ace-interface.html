@@ -246,15 +246,62 @@
       expand(true);
       const msg = document.createElement('div');
       msg.className = `message ${type}`;
-      msg.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+      
+      // 1. Escape HTML first to prevent XSS from user content
+      let safe = escapeHtml(text);
+      
+      // 2. Apply Markdown Formatting (Simple)
+      // Bold
+      safe = safe.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      // Inline Code
+      safe = safe.replace(/`(.*?)`/g, '<code>$1</code>');
+      // Tables (Simple row conversion) | col | col |
+      if (safe.includes('|')) {
+         const lines = safe.split('\n');
+         let inTable = false;
+         safe = lines.map(line => {
+            if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+               const cells = line.split('|').filter(c => c.trim() !== '');
+               const isHeader = line.includes('---');
+               if (isHeader) return ''; // Skip separator lines
+               
+               const htmlCells = cells.map(c => isHeader ? `<th>${c}</th>` : `<td>${c}</td>`).join('');
+               
+               if (!inTable) {
+                  inTable = true;
+                  return `<table class="md-table"><tr>${htmlCells}</tr>`;
+               }
+               return `<tr>${htmlCells}</tr>`;
+            } else {
+               if (inTable) {
+                  inTable = false;
+                  return `</table><br>${line}`; 
+               }
+               return line;
+            }
+         }).join('\n');
+         if (inTable) safe += '</table>';
+      }
+      
+      // Newlines and Model HTML fixes
+      safe = safe.replace(/\n/g, '<br>');
+      safe = safe.replace(/&lt;br&gt;/gi, '<br>');
+      safe = safe.replace(/&lt;br\/&gt;/gi, '<br>');
+      safe = safe.replace(/&lt;br \/&gt;/gi, '<br>');
+
+      msg.innerHTML = `<div class="message-content">${safe}</div>`;
       expandedList.appendChild(msg);
       expandedList.scrollTop = expandedList.scrollHeight;
     }
     
     function escapeHtml(text) {
-      const div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+      if (!text) return '';
+      return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
     }
 
     // ===== Slash Commands =====
@@ -378,8 +425,14 @@
                 
               } else if (event.type === 'response' || event.type === 'content') {
                 // Final response - Show this!
-                const content = event.content || event.data?.content || event.text || '';
+                let content = event.content || event.data?.content || event.text || '';
                 if (content) {
+                  // FAILSAFE: Convert HTML to Markdown if model slips up
+                  content = content
+                    .replace(/<strong>(.*?)<\/strong>/g, '**$1**')
+                    .replace(/<b>(.*?)<\/b>/g, '**$1**')
+                    .replace(/<code>(.*?)<\/code>/g, '`$1`');
+
                   // Format markdown-like syntax
                   const formatted = content
                     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
