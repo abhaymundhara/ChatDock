@@ -76,6 +76,11 @@
           window.__CHAT_BASE__.get &&
           window.__CHAT_BASE__.get()) ||
         "http://127.0.0.1:3001";
+      const CHAT_AUTH =
+        (window.__CHAT_AUTH__ &&
+          window.__CHAT_AUTH__.get &&
+          window.__CHAT_AUTH__.get()) ||
+        {};
 
       // ===== DOM Elements =====
       const aceBar = document.getElementById("aceBar");
@@ -106,9 +111,15 @@
       loadModels();
 
       // ===== Helper Functions =====
+      function getAuthHeaders() {
+        return CHAT_AUTH || {};
+      }
+
       async function loadModels() {
         try {
-          const res = await fetch(`${CHAT_BASE}/models`);
+          const res = await fetch(`${CHAT_BASE}/models`, {
+            headers: getAuthHeaders(),
+          });
           const data = await res.json();
           currentModels = data.models || [];
           currentModel =
@@ -234,7 +245,7 @@
             try {
               await fetch(`${CHAT_BASE}/models/selected`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
                 body: JSON.stringify({ model: selectedModel }),
               });
             } catch (e) {
@@ -359,7 +370,9 @@
 
         if (command === "tools") {
           try {
-            const res = await fetch(`${CHAT_BASE}/tools`);
+            const res = await fetch(`${CHAT_BASE}/tools`, {
+              headers: getAuthHeaders(),
+            });
             const data = await res.json();
             expand(true);
             expandedList.innerHTML = "";
@@ -380,7 +393,9 @@
 
         if (command === "skills") {
           try {
-            const res = await fetch(`${CHAT_BASE}/skills`);
+            const res = await fetch(`${CHAT_BASE}/skills`, {
+              headers: getAuthHeaders(),
+            });
             const data = await res.json();
             expand(true);
             expandedList.innerHTML = "";
@@ -438,7 +453,7 @@
           // Use the agentic endpoint with tool calling
           const response = await fetch(`${CHAT_BASE}/chat/agent`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
             body: JSON.stringify({ message: text, model: currentModel }),
           });
 

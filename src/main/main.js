@@ -3,7 +3,7 @@ const { fork } = require("node:child_process");
 const { findAvailablePort } = require("../shared/port-allocator");
 const { buildTrayTemplate } = require("./tray/tray-menu");
 const { getSettingsHtml } = require("./settings/settings-window");
-const { loadSettings, saveSettings } = require("../server/utils/settings-store");
+const { loadSettings, saveSettings, ensureApiKey } = require("../server/utils/settings-store");
 const { validateHotkey } = require("./settings/settings-ipc");
 const { getTrayTitle } = require("./tray/tray-utils");
 
@@ -39,12 +39,16 @@ function getIndexHtmlPath() {
   return path.join(__dirname, "../renderer/ace-interface.html");
 }
 
-function buildServerEnv({ port, model, base }) {
+function buildServerEnv({ port, model, base, apiKey, host, userDataPath, appPath }) {
   return {
     ...process.env,
     CHAT_SERVER_PORT: String(port),
+    CHAT_SERVER_HOST: host,
     OLLAMA_MODEL: model,
     OLLAMA_BASE: base,
+    CHATDOCK_API_KEY: apiKey,
+    CHATDOCK_USER_DATA: userDataPath,
+    CHATDOCK_APP_PATH: appPath,
   };
 }
 
@@ -67,16 +71,24 @@ async function waitForServerReady(
   return false;
 }
 
-function startServer({ port, model, base }) {
-  const env = buildServerEnv({ port, model, base });
+function startServer({ port, model, base, apiKey, host, userDataPath, appPath }) {
+  const env = buildServerEnv({
+    port,
+    model,
+    base,
+    apiKey,
+    host,
+    userDataPath,
+    appPath,
+  });
   if (app && typeof app.getPath === "function") {
     env.USER_DATA_PATH = app.getPath("userData");
   }
-  const appPath =
-    app && typeof app.getAppPath === "function" ? app.getAppPath() : __dirname;
+  const resolvedAppPath =
+    app && typeof app.getAppPath === "function" ? app.getAppPath() : appPath;
   
   // Use orchestrator server for full agentic capabilities (45+ tools)
-  const serverPath = path.join(appPath, "src/server/server-orchestrator.js");
+  const serverPath = path.join(resolvedAppPath, "src/server/server-orchestrator.js");
   
   console.log('[main] Starting orchestrator server with agentic tools...');
   serverProcess = fork(serverPath, [], { env, stdio: "inherit" });
@@ -218,8 +230,21 @@ function createTray({ serverUrl }) {
 
 async function boot() {
   const port = await findAvailablePort(DEFAULT_PORT);
+  const host = process.env.CHAT_SERVER_HOST || "0.0.0.0";
+  const userDataPath = app.getPath("userData");
+  const appPath = app.getAppPath();
+  const apiKey = ensureApiKey(userDataPath);
   process.env.CHAT_SERVER_PORT = String(port);
-  startServer({ port, model: DEFAULT_MODEL, base: DEFAULT_BASE });
+  process.env.CHAT_SERVER_HOST = host;
+  startServer({
+    port,
+    model: DEFAULT_MODEL,
+    base: DEFAULT_BASE,
+    apiKey,
+    host,
+    userDataPath,
+    appPath,
+  });
 
   const ready = await waitForServerReady(port);
   if (!ready) {
