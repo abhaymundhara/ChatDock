@@ -11,10 +11,13 @@ const path = require("node:path");
 const { findAvailablePort } = require("../shared/port-allocator");
 const { chooseModel } = require("../renderer/components/model-selection");
 const { loadSettings } = require("./utils/settings-store");
+const { createAuthMiddleware } = require("./utils/auth");
+const { ConfirmationStore } = require("./utils/confirmation-store");
 const { Orchestrator, OllamaClient, ToolRegistry, SkillLoader, PromptBuilder } = require("./orchestrator");
 
 const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
+const confirmationStore = new ConfirmationStore();
 
 // ===== Model Persistence =====
 const LAST_MODEL_PATH = path.join(__dirname, "../../config/last_model.txt");
@@ -75,6 +78,12 @@ const orchestrator = new Orchestrator({
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(
+  createAuthMiddleware({
+    apiKey: process.env.CHATDOCK_API_KEY,
+    allowedIps: process.env.CHATDOCK_ALLOWED_IPS || "",
+  }),
+);
 
 // ===== Health Endpoint =====
 app.get("/health", async (_req, res) => {
@@ -217,24 +226,32 @@ app.get("/tools", (_req, res) => {
 
 app.post("/tools/execute", async (req, res) => {
   try {
-    const { name, params } = req.body;
+    const { name, params, confirmationId } = req.body;
     const tool = orchestrator.tools.get(name);
-    
+
     if (!tool) {
       return res.status(404).json({ error: `Tool not found: ${name}` });
     }
-    
-    if (tool.requiresConfirmation && !req.body.confirmed) {
-      return res.json({ 
-        requiresConfirmation: true, 
-        tool: name,
-        params 
-      });
+
+    if (tool.requiresConfirmation) {
+      if (!confirmationId) {
+        const { id, expiresAt } = confirmationStore.issue(name, params);
+        return res.json({
+          requiresConfirmation: true,
+          confirmationId: id,
+          expiresAt,
+          tool: name,
+          params,
+        });
+      }
+      const ok = confirmationStore.verify(confirmationId, name, params);
+      if (!ok) {
+        return res.status(403).json({ error: "Invalid or expired confirmation" });
+      }
     }
-    
+
     const result = await orchestrator.tools.execute(name, params);
     res.json({ success: true, result });
-    
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
