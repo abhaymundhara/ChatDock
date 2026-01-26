@@ -4,6 +4,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { grep_search, web_search, fetch_url } from '../src/server/tools/search.js';
 import { run_command, get_system_info, get_current_time } from '../src/server/tools/shell.js';
@@ -20,6 +23,22 @@ describe('Search Tools', () => {
       });
       assert.ok(result.results);
       assert.ok(Array.isArray(result.results));
+    });
+
+    it('should not execute shell expansions in pattern', async () => {
+      const marker = path.join(os.tmpdir(), `chatdock-grep-${Date.now()}`);
+      const pattern = `$(touch ${marker})`;
+      try {
+        if (fs.existsSync(marker)) fs.unlinkSync(marker);
+        await grep_search.run({
+          pattern,
+          path: '.',
+          maxResults: 1
+        });
+        assert.ok(!fs.existsSync(marker));
+      } finally {
+        if (fs.existsSync(marker)) fs.unlinkSync(marker);
+      }
     });
   });
 

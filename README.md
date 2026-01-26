@@ -90,11 +90,7 @@ ChatDock comes equipped with 52+ tools organized into:
 git clone https://github.com/abhaymundhara/ChatDock.git
 cd ChatDock
 
-# Using npm
 npm install
-
-# Using bun
-bun install
 ```
 
 ---
@@ -102,11 +98,7 @@ bun install
 ## 🧪 Development
 
 ```bash
-# Using npm
 npm run dev
-
-# Using bun
-bun run dev
 ```
 
 ---

@@ -18,9 +18,17 @@ function getChatBase({ port }) {
   return `http://127.0.0.1:${port}`;
 }
 
+function getAuthHeaders({ apiKey }) {
+  if (!apiKey) return {};
+  return { Authorization: `Bearer ${apiKey}` };
+}
+
 if (contextBridge && typeof contextBridge.exposeInMainWorld === 'function') {
   contextBridge.exposeInMainWorld('__CHAT_BASE__', {
     get: () => getChatBase({ port: Number(process.env.CHAT_SERVER_PORT || 3001) })
+  });
+  contextBridge.exposeInMainWorld('__CHAT_AUTH__', {
+    get: () => getAuthHeaders({ apiKey: process.env.CHATDOCK_API_KEY })
   });
   
   // Expose settings API
@@ -31,4 +39,4 @@ if (contextBridge && typeof contextBridge.exposeInMainWorld === 'function') {
   }
 }
 
-module.exports = { getChatBase };
+module.exports = { getChatBase, getAuthHeaders };

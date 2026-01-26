@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseModel } from '../src/renderer/components/model-selection.js';
+import { chooseModel } from '../src/shared/choose-model.js';
 
 test('uses requested model when provided', () => {
   assert.equal(chooseModel({ requested: 'm1', last: 'm2', available: ['m3'] }), 'm1');

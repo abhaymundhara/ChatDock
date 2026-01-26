@@ -8,16 +8,19 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs");
 const path = require("node:path");
-const { findAvailablePort } = require("../shared/port-allocator");
-const { chooseModel } = require("../renderer/components/model-selection");
+const { chooseModel } = require("../shared/choose-model");
 const { loadSettings } = require("./utils/settings-store");
+const { getServerConfig } = require("./utils/server-config");
+const { createAuthMiddleware } = require("./utils/auth");
+const { ConfirmationStore } = require("./utils/confirmation-store");
 const { Orchestrator, OllamaClient, ToolRegistry, SkillLoader, PromptBuilder } = require("./orchestrator");
 
-const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
+const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH } =
+  getServerConfig();
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
+const confirmationStore = new ConfirmationStore();
 
 // ===== Model Persistence =====
-const LAST_MODEL_PATH = path.join(__dirname, "../../config/last_model.txt");
 
 function loadLastModel() {
   try {
@@ -36,16 +39,8 @@ function saveLastModel(name) {
 }
 
 // ===== System Prompt =====
-const PROMPT_PATH = path.join(__dirname, "../../assets/prompt.txt");
-let SYSTEM_PROMPT = "";
-try {
-  SYSTEM_PROMPT = fs.readFileSync(PROMPT_PATH, "utf-8");
-  if (SYSTEM_PROMPT.trim().length > 0) {
-    console.log("[server] Loaded system prompt from prompt.txt");
-  }
-} catch {
-  console.warn("[server] No prompt.txt found; using default prompt");
-}
+const promptBuilder = new PromptBuilder();
+const SYSTEM_PROMPT = promptBuilder.build();
 
 // ===== Initialize Orchestrator =====
 const orchestrator = new Orchestrator({
@@ -75,6 +70,12 @@ const orchestrator = new Orchestrator({
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(
+  createAuthMiddleware({
+    apiKey: process.env.CHATDOCK_API_KEY,
+    allowedIps: process.env.CHATDOCK_ALLOWED_IPS || "",
+  }),
+);
 
 // ===== Health Endpoint =====
 app.get("/health", async (_req, res) => {
@@ -217,24 +218,32 @@ app.get("/tools", (_req, res) => {
 
 app.post("/tools/execute", async (req, res) => {
   try {
-    const { name, params } = req.body;
+    const { name, params, confirmationId } = req.body;
     const tool = orchestrator.tools.get(name);
-    
+
     if (!tool) {
       return res.status(404).json({ error: `Tool not found: ${name}` });
     }
-    
-    if (tool.requiresConfirmation && !req.body.confirmed) {
-      return res.json({ 
-        requiresConfirmation: true, 
-        tool: name,
-        params 
-      });
+
+    if (tool.requiresConfirmation) {
+      if (!confirmationId) {
+        const { id, expiresAt } = confirmationStore.issue(name, params);
+        return res.json({
+          requiresConfirmation: true,
+          confirmationId: id,
+          expiresAt,
+          tool: name,
+          params,
+        });
+      }
+      const ok = confirmationStore.verify(confirmationId, name, params);
+      if (!ok) {
+        return res.status(403).json({ error: "Invalid or expired confirmation" });
+      }
     }
-    
+
     const result = await orchestrator.tools.execute(name, params);
     res.json({ success: true, result });
-    
   } catch (err) {
     res.status(500).json({ error: err?.message || String(err) });
   }
@@ -247,52 +256,24 @@ app.get("/skills", (_req, res) => {
 });
 
 // ===== Start Server =====
-(async () => {
-  const port = await findAvailablePort(PORT);
-  if (port !== PORT) {
-    process.env.CHAT_SERVER_PORT = String(port);
-  }
-  
+(() => {
   const server = http.createServer(app);
-  
-  let attemptPort = port;
-  const maxAttempts = 50;
-  
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      await new Promise((resolve, reject) => {
-        const onError = (err) => {
-          server.removeListener("listening", onListen);
-          reject(err);
-        };
-        const onListen = () => {
-          server.removeListener("error", onError);
-          resolve();
-        };
-        server.once("error", onError);
-        server.once("listening", onListen);
-        server.listen(attemptPort);
-      });
-      
-      process.env.CHAT_SERVER_PORT = String(attemptPort);
-      console.log(`[server] listening on http://127.0.0.1:${attemptPort}`);
-      console.log(`[server] Tools: ${orchestrator.tools.count()}`);
-      console.log(`[server] Skills: ${orchestrator.skills.count()}`);
-      
-      const last = loadLastModel();
-      if (last) {
-        console.log(`[server] Last model: ${last}`);
-      }
-      break;
-      
-    } catch (err) {
-      if (err && err.code === "EADDRINUSE") {
-        console.warn(`[server] Port ${attemptPort} in use, trying ${attemptPort + 1}`);
-        attemptPort += 1;
-      } else {
-        console.error("[server] Failed to start:", err);
-        process.exit(1);
-      }
+
+  server.on("error", (err) => {
+    console.error("[server] Failed to start:", err);
+    process.exit(1);
+  });
+
+  server.listen(PORT, HOST, () => {
+    process.env.CHAT_SERVER_PORT = String(PORT);
+    process.env.CHAT_SERVER_HOST = HOST;
+    console.log(`[server] listening on http://${HOST}:${PORT}`);
+    console.log(`[server] Tools: ${orchestrator.tools.count()}`);
+    console.log(`[server] Skills: ${orchestrator.skills.count()}`);
+
+    const last = loadLastModel();
+    if (last) {
+      console.log(`[server] Last model: ${last}`);
     }
-  }
+  });
 })();

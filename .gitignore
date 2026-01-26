@@ -30,10 +30,12 @@ coverage/
 # Worktrees
 .worktrees/
 last_model.txt
+config/last_model.txt
 
 IMPLEMENTATION_NOTES.md
 TEST_SCENARIOS.md
 Documentation.md
+Documentation.MD
 AGENTIC_LOOP_IMPLEMENTATION.md
 AGENTIC_LOOP_MIGRATION.md
 

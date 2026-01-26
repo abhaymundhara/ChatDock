@@ -9,5 +9,5 @@ test('hotkey uses CommandOrControl', () => {
 
 test('index html path is correct', () => {
   const p = getIndexHtmlPath();
-  assert.equal(path.basename(p), 'Index.html');
+  assert.equal(path.basename(p), 'ace-interface.html');
 });

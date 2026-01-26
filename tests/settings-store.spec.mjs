@@ -7,4 +7,5 @@ test('mergeSettings applies defaults', () => {
   assert.equal(merged.hotkey, 'CommandOrControl+Shift+Space');
   assert.equal(merged.temperature, 0.7);
   assert.ok(typeof merged.systemPrompt === 'string');
+  assert.ok('apiKey' in merged);
 });
