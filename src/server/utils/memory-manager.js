@@ -3,21 +3,22 @@
  * Manages persistent memory files for maintaining context across sessions
  */
 
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
 
 class MemoryManager {
   constructor(options = {}) {
     // Memory directory: ~/ChatDock/Memory/
-    this.memoryDir = options.memoryDir || path.join(os.homedir(), 'ChatDock', 'Memory');
-    this.userMemoryFile = path.join(this.memoryDir, 'user.md');
-    this.systemMemoryFile = path.join(this.memoryDir, 'chatdock.md');
-    
+    this.memoryDir =
+      options.memoryDir || path.join(os.homedir(), "ChatDock", "Memory");
+    this.userMemoryFile = path.join(this.memoryDir, "user.md");
+    this.systemMemoryFile = path.join(this.memoryDir, "chatdock.md");
+
     // In-memory cache
     this.userMemory = null;
     this.systemMemory = null;
-    
+
     // Ensure memory directory exists
     this.initialize();
   }
@@ -49,7 +50,7 @@ class MemoryManager {
 ---
 *This file is automatically updated as ChatDock learns about you.*
 `;
-        fs.writeFileSync(this.userMemoryFile, defaultUserMemory, 'utf-8');
+        fs.writeFileSync(this.userMemoryFile, defaultUserMemory, "utf-8");
         console.log(`[memory] Created user memory: ${this.userMemoryFile}`);
       }
 
@@ -71,7 +72,7 @@ You are ChatDock, a local AI assistant running on the user's machine.
 ---
 *This file tracks ChatDock's identity and learned behaviors.*
 `;
-        fs.writeFileSync(this.systemMemoryFile, defaultSystemMemory, 'utf-8');
+        fs.writeFileSync(this.systemMemoryFile, defaultSystemMemory, "utf-8");
         console.log(`[memory] Created system memory: ${this.systemMemoryFile}`);
       }
 
@@ -87,10 +88,14 @@ You are ChatDock, a local AI assistant running on the user's machine.
    */
   loadMemory() {
     try {
-      this.userMemory = fs.readFileSync(this.userMemoryFile, 'utf-8');
-      this.systemMemory = fs.readFileSync(this.systemMemoryFile, 'utf-8');
-      console.log(`[memory] Loaded user memory (${this.userMemory.length} chars)`);
-      console.log(`[memory] Loaded system memory (${this.systemMemory.length} chars)`);
+      this.userMemory = fs.readFileSync(this.userMemoryFile, "utf-8");
+      this.systemMemory = fs.readFileSync(this.systemMemoryFile, "utf-8");
+      console.log(
+        `[memory] Loaded user memory (${this.userMemory.length} chars)`,
+      );
+      console.log(
+        `[memory] Loaded system memory (${this.systemMemory.length} chars)`,
+      );
     } catch (error) {
       console.error(`[memory] Failed to load memory:`, error.message);
     }
@@ -104,7 +109,7 @@ You are ChatDock, a local AI assistant running on the user's machine.
     if (!this.userMemory) {
       this.loadMemory();
     }
-    return this.userMemory || '';
+    return this.userMemory || "";
   }
 
   /**
@@ -115,7 +120,7 @@ You are ChatDock, a local AI assistant running on the user's machine.
     if (!this.systemMemory) {
       this.loadMemory();
     }
-    return this.systemMemory || '';
+    return this.systemMemory || "";
   }
 
   /**
@@ -125,7 +130,7 @@ You are ChatDock, a local AI assistant running on the user's machine.
   getCombinedMemory() {
     const user = this.getUserMemory();
     const system = this.getSystemMemory();
-    
+
     return `## Persistent Memory
 
 ### User Context
@@ -144,11 +149,11 @@ ${system}
   updateUserMemory(section, content) {
     try {
       let memory = this.getUserMemory();
-      
+
       // Find the section
-      const sectionRegex = new RegExp(`## ${section}[\\s\\S]*?(?=##|$)`, 'i');
+      const sectionRegex = new RegExp(`## ${section}[\\s\\S]*?(?=##|$)`, "i");
       const match = memory.match(sectionRegex);
-      
+
       if (match) {
         // Section exists, append to it
         const existingSection = match[0];
@@ -158,11 +163,11 @@ ${system}
         // Section doesn't exist, create it
         memory += `\n## ${section}\n- ${content}\n`;
       }
-      
+
       // Save to file and cache
-      fs.writeFileSync(this.userMemoryFile, memory, 'utf-8');
+      fs.writeFileSync(this.userMemoryFile, memory, "utf-8");
       this.userMemory = memory;
-      
+
       console.log(`[memory] Updated user memory: ${section}`);
       return true;
     } catch (error) {
@@ -179,11 +184,11 @@ ${system}
   updateSystemMemory(section, content) {
     try {
       let memory = this.getSystemMemory();
-      
+
       // Find the section
-      const sectionRegex = new RegExp(`## ${section}[\\s\\S]*?(?=##|$)`, 'i');
+      const sectionRegex = new RegExp(`## ${section}[\\s\\S]*?(?=##|$)`, "i");
       const match = memory.match(sectionRegex);
-      
+
       if (match) {
         const existingSection = match[0];
         const updatedSection = existingSection.trimEnd() + `\n- ${content}`;
@@ -191,10 +196,10 @@ ${system}
       } else {
         memory += `\n## ${section}\n- ${content}\n`;
       }
-      
-      fs.writeFileSync(this.systemMemoryFile, memory, 'utf-8');
+
+      fs.writeFileSync(this.systemMemoryFile, memory, "utf-8");
       this.systemMemory = memory;
-      
+
       console.log(`[memory] Updated system memory: ${section}`);
       return true;
     } catch (error) {
@@ -210,7 +215,7 @@ ${system}
   logSession(event) {
     const timestamp = new Date().toISOString();
     const entry = `${timestamp}: ${event}`;
-    return this.updateSystemMemory('Session History', entry);
+    return this.updateSystemMemory("Session History", entry);
   }
 
   /**
@@ -222,26 +227,26 @@ ${system}
     const learnings = {
       preferences: [],
       projects: [],
-      tools: []
+      tools: [],
     };
 
     // Simple keyword-based extraction
     // TODO: Could use LLM to extract more sophisticated patterns
     for (const msg of messages) {
-      if (msg.role === 'user') {
+      if (msg.role === "user") {
         const content = msg.content.toLowerCase();
-        
+
         // Detect preferences
-        if (content.includes('i prefer') || content.includes('i like')) {
+        if (content.includes("i prefer") || content.includes("i like")) {
           learnings.preferences.push(msg.content);
         }
-        
+
         // Detect project mentions
-        if (content.includes('project') || content.includes('working on')) {
+        if (content.includes("project") || content.includes("working on")) {
           learnings.projects.push(msg.content);
         }
       }
-      
+
       // Track tool usage
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
@@ -259,21 +264,21 @@ ${system}
    */
   saveConversationLearnings(messages) {
     const learnings = this.extractLearnings(messages);
-    
+
     // Save preferences
     for (const pref of learnings.preferences) {
-      this.updateUserMemory('Preferences', pref);
+      this.updateUserMemory("Preferences", pref);
     }
-    
+
     // Save projects
     for (const proj of learnings.projects) {
-      this.updateUserMemory('Projects', proj);
+      this.updateUserMemory("Projects", proj);
     }
-    
+
     // Update tool usage history
     if (learnings.tools.length > 0) {
-      const toolSummary = `Used tools: ${[...new Set(learnings.tools)].join(', ')}`;
-      this.updateUserMemory('History', toolSummary);
+      const toolSummary = `Used tools: ${[...new Set(learnings.tools)].join(", ")}`;
+      this.updateUserMemory("History", toolSummary);
     }
   }
 
@@ -288,10 +293,10 @@ ${system}
       if (fs.existsSync(this.systemMemoryFile)) {
         fs.unlinkSync(this.systemMemoryFile);
       }
-      
+
       this.userMemory = null;
       this.systemMemory = null;
-      
+
       this.initialize();
       console.log(`[memory] Memory cleared and reset`);
       return true;

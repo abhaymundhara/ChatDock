@@ -84,7 +84,9 @@ class Orchestrator {
     await this.skills.load();
 
     // Log session start
-    this.memory.logSession(`Session started with ${this.tools.count()} tools, ${this.skills.count()} skills`);
+    this.memory.logSession(
+      `Session started with ${this.tools.count()} tools, ${this.skills.count()} skills`,
+    );
 
     return {
       ollamaVersion: health.version,
@@ -704,7 +706,7 @@ After planning, you can proceed with execution.`,
       ...context,
       memory: this.memory.getCombinedMemory(),
     };
-    
+
     const basePrompt = this.promptBuilder.build({
       tools: this.tools.getDefinitions(),
       skills: this.skills.getActive(),
