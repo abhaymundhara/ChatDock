@@ -30,3 +30,9 @@ coverage/
 # Worktrees
 .worktrees/
 last_model.txt
+
+IMPLEMENTATION_NOTES.md
+TEST_SCENARIOS.md
+
+# Bun
+.bun/

@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatDock - ACE</title>
+  <link rel="stylesheet" href="styles/ace-ui.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="drag-handle"></div>
+  
+  <div class="ace-bar" id="aceBar">
+    <!-- Input Row (Always Visible) -->
+    <div class="input-row">
+      <div class="bar-icon" id="mainIcon">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2L2 7L12 12L22 7L12 2Z" fill="white"/>
+          <path d="M2 17L12 22L22 17" stroke="white" stroke-width="2" fill="none"/>
+          <path d="M2 12L12 17L22 12" stroke="white" stroke-width="2" fill="none"/>
+        </svg>
+      </div>
+      
+      <input 
+        type="text" 
+        class="bar-input" 
+        id="chatInput" 
+        placeholder="Type a command or ask a question..." 
+        autocomplete="off"
+        autofocus
+      >
+      
+      <div class="bar-actions">
+        <button class="settings-btn" id="settingsBtn" title="Settings">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+          </svg>
+        </button>
+        
+        <div class="action-badge" id="statusBadge" style="display: none;">
+          Ready
+        </div>
+      </div>
+    </div>
+    
+    <!-- Command Palette (shown when typing /) -->
+    <div class="command-palette" id="commandPalette" style="display: none;">
+      <!-- Dynamic command items -->
+    </div>
+    
+    <!-- Expanded Content -->
+    <div class="expanded-content" id="expandedList">
+      <!-- Dynamic Content Here -->
+    </div>
+  </div>
+
+  <script>
+    // ===== Configuration =====
+    const CHAT_BASE = (window.__CHAT_BASE__ && window.__CHAT_BASE__.get && window.__CHAT_BASE__.get()) || 'http://127.0.0.1:3001';
+    
+    // ===== DOM Elements =====
+    const aceBar = document.getElementById('aceBar');
+    const chatInput = document.getElementById('chatInput');
+    const expandedList = document.getElementById('expandedList');
+    const mainIcon = document.getElementById('mainIcon');
+    const statusBadge = document.getElementById('statusBadge');
+    const settingsBtn = document.getElementById('settingsBtn');
+    const commandPalette = document.getElementById('commandPalette');
+    
+    // ===== State =====
+    let isProcessing = false;
+    let currentModels = [];
+    let currentModel = '';
+    let selectedCommandIndex = 0;
+    
+    // ===== Available Commands =====
+    const COMMANDS = [
+      { name: '/help', description: 'Show available commands', icon: '❓' },
+      { name: '/model', description: 'Switch AI model', icon: '🤖' },
+      { name: '/tools', description: 'Show all tools', icon: '🔧' },
+      { name: '/skills', description: 'Show all skills', icon: '⚡' },
+      { name: '/clear', description: 'Clear conversation', icon: '🗑️' }
+    ];
+    
+    // ===== Initial Setup =====
+    chatInput.focus();
+    loadModels();
+    
+    // ===== Helper Functions =====
+    async function loadModels() {
+      try {
+        const res = await fetch(`${CHAT_BASE}/models`);
+        const data = await res.json();
+        currentModels = data.models || [];
+        currentModel = data.lastModel || (currentModels.length > 0 ? currentModels[0] : '');
+      } catch (e) {
+        console.error('Failed to load models:', e);
+      }
+    }
+    
+    function setThinking(thinking) {
+      isProcessing = thinking;
+      
+      if (thinking) {
+        mainIcon.classList.add('loading');
+        mainIcon.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 4V2M12 20v2M4 12H2m20 0h-2m-2.05-5.95l-1.41-1.41M5.46 19.95l-1.41-1.41M18.54 18.54l1.41 1.41M5.46 4.05l-1.41 1.41" stroke="currentColor" stroke-width="2" fill="none"/></svg>`;
+        statusBadge.style.display = 'flex';
+        statusBadge.innerText = 'Working...';
+        statusBadge.classList.remove('completed');
+        settingsBtn.style.display = 'none';
+      } else {
+        mainIcon.classList.remove('loading');
+        mainIcon.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 2L2 7L12 12L22 7L12 2Z" fill="white"/><path d="M2 17L12 22L22 17" stroke="white" stroke-width="2" fill="none"/><path d="M2 12L12 17L22 12" stroke="white" stroke-width="2" fill="none"/></svg>`;
+        statusBadge.style.display = 'none';
+        settingsBtn.style.display = 'flex';
+      }
+    }
+    
+    function expand(shouldExpand) {
+      if (shouldExpand) {
+        aceBar.classList.add('expanded');
+      } else {
+        aceBar.classList.remove('expanded');
+      }
+    }
+    
+    function showCommandPalette(filter = '') {
+      // Check if we're typing /model specifically
+      if (filter.toLowerCase() === 'model' || filter.toLowerCase() === 'models') {
+        showModelSelector();
+        return;
+      }
+      
+      const filtered = COMMANDS.filter(cmd => 
+        cmd.name.toLowerCase().includes(filter.toLowerCase()) ||
+        cmd.description.toLowerCase().includes(filter.toLowerCase())
+      );
+      
+      if (filtered.length === 0) {
+        hideCommandPalette();
+        return;
+      }
+      
+      commandPalette.innerHTML = filtered.map((cmd, idx) => `
+        <div class="command-item ${idx === selectedCommandIndex ? 'selected' : ''}" data-command="${cmd.name}">
+          <span class="command-icon">${cmd.icon}</span>
+          <div class="command-info">
+            <div class="command-name">${cmd.name}</div>
+            <div class="command-desc">${cmd.description}</div>
+          </div>
+        </div>
+      `).join('');
+      
+      commandPalette.style.display = 'block';
+      setTimeout(() => commandPalette.classList.add('visible'), 10);
+      expand(true);
+      
+      // Add click handlers
+      commandPalette.querySelectorAll('.command-item').forEach((item) => {
+        item.addEventListener('click', () => {
+          chatInput.value = item.dataset.command;
+          hideCommandPalette();
+          chatInput.focus();
+          sendMessage();
+        });
+      });
+    }
+    
+    function showModelSelector() {
+      if (currentModels.length === 0) {
+        commandPalette.innerHTML = '<div class="command-item"><div class="command-info"><div class="command-desc">Loading models...</div></div></div>';
+        commandPalette.style.display = 'block';
+        setTimeout(() => commandPalette.classList.add('visible'), 10);
+        expand(true);
+        return;
+      }
+      
+      commandPalette.innerHTML = `
+        <div class="model-list">
+          ${currentModels.map(model => `
+            <div class="model-item ${model === currentModel ? 'active' : ''}" data-model="${model}">
+              <span>${model}</span>
+              ${model === currentModel ? '<span class="checkmark">✓</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
+      
+      commandPalette.style.display = 'block';
+      setTimeout(() => commandPalette.classList.add('visible'), 10);
+      expand(true);
+      
+      // Add click handlers for model selection
+      commandPalette.querySelectorAll('.model-item').forEach((item) => {
+        item.addEventListener('click', async () => {
+          const selectedModel = item.dataset.model;
+          currentModel = selectedModel;
+          
+          // Save to server
+          try {
+            await fetch(`${CHAT_BASE}/models/selected`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: selectedModel })
+            });
+          } catch (e) {
+            console.error('Failed to save model:', e);
+          }
+          
+          // Update UI
+          chatInput.value = '';
+          hideCommandPalette();
+          expandedList.innerHTML = '';
+          addMessage(`Switched to model: ${selectedModel}`, 'assistant');
+          
+          setTimeout(() => {
+            expandedList.innerHTML = '';
+            expand(false);
+          }, 2000);
+        });
+      });
+    }
+    
+    function hideCommandPalette() {
+      commandPalette.classList.remove('visible');
+      setTimeout(() => {
+        commandPalette.style.display = 'none';
+        commandPalette.innerHTML = '';
+      }, 250); // Match CSS transition duration
+      selectedCommandIndex = 0;
+    }
+    
+    function addToolItem(name) {
+      expand(true);
+      const item = document.createElement('div');
+      item.className = 'tool-item';
+      item.innerHTML = `
+        <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+        <span>Running ${name}...</span>
+      `;
+      expandedList.insertBefore(item, expandedList.firstChild);
+      return item;
+    }
+    
+    function addMessage(text, type = 'assistant') {
+      expand(true);
+      const msg = document.createElement('div');
+      msg.className = `message ${type}`;
+      msg.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
+      expandedList.appendChild(msg);
+      expandedList.scrollTop = expandedList.scrollHeight;
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ===== Slash Commands =====
+    async function handleSlashCommand(cmd) {
+      const parts = cmd.slice(1).split(' ');
+      const command = parts[0].toLowerCase();
+      
+      if (command === 'model' || command === 'models') {
+        // Model switching is now handled in the palette
+        showModelSelector();
+        return true;
+      }
+      
+      if (command === 'tools') {
+        try {
+          const res = await fetch(`${CHAT_BASE}/tools`);
+          const data = await res.json();
+          expand(true);
+          expandedList.innerHTML = '';
+          addMessage(`Available tools (${data.count}):\n\n${data.tools.slice(0, 20).map(t => `• ${t.name}: ${t.description}`).join('\n')}${data.count > 20 ? `\n\n...and ${data.count - 20} more` : ''}`, 'assistant');
+        } catch (e) {
+          addMessage('Error loading tools: ' + e.message, 'assistant');
+        }
+        return true;
+      }
+      
+      if (command === 'skills') {
+        try {
+          const res = await fetch(`${CHAT_BASE}/skills`);
+          const data = await res.json();
+          expand(true);
+          expandedList.innerHTML = '';
+          addMessage(`Available skills (${data.count}):\n\n${data.skills.map(s => `• ${s.name}: ${s.description}`).join('\n')}`, 'assistant');
+        } catch (e) {
+          addMessage('Error loading skills: ' + e.message, 'assistant');
+        }
+        return true;
+      }
+      
+      if (command === 'clear') {
+        expandedList.innerHTML = '';
+        expand(false);
+        return true;
+      }
+      
+      if (command === 'help') {
+        expand(true);
+        expandedList.innerHTML = '';
+        addMessage(`Available commands:\n\n/model - Switch AI model\n/tools - List available tools\n/skills - List available skills\n/clear - Clear conversation\n/help - Show this help`, 'assistant');
+        return true;
+      }
+      
+      return false;
+    }
+
+    // ===== Chat Logic =====
+    async function sendMessage() {
+      const text = chatInput.value.trim();
+      if (!text || isProcessing) return;
+      
+      // Handle slash commands
+      if (text.startsWith('/')) {
+        chatInput.value = '';
+        hideCommandPalette();
+        const handled = await handleSlashCommand(text);
+        if (handled) return;
+      }
+      
+      setThinking(true);
+      expandedList.innerHTML = '';
+      expand(false);
+      hideCommandPalette();
+      
+      chatInput.value = '';
+      chatInput.placeholder = text;
+      
+      try {
+        // Use the agentic endpoint with tool calling
+        const response = await fetch(`${CHAT_BASE}/chat/agent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, model: currentModel })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server error: ${response.status}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentToolItem = null;
+        
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep incomplete line in buffer
+          
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            
+            try {
+              const event = JSON.parse(line);
+              
+              if (event.type === 'state') {
+                // State changes: idle -> analyzing -> thinking -> responding
+                if (event.state === 'thinking' || event.state === 'analyzing') {
+                  statusBadge.innerText = event.state.charAt(0).toUpperCase() + event.state.slice(1) + '...';
+                }
+              } else if (event.type === 'tool_start') {
+                // Tool execution started - Update badge only, don't show in list
+                statusBadge.innerText = `Running ${event.tool || 'tool'}...`;
+                statusBadge.style.display = 'flex';
+                
+              } else if (event.type === 'tool_result') {
+                // Tool completed - just log to console for debug
+                console.log('Tool result:', event.data);
+                
+              } else if (event.type === 'response' || event.type === 'content') {
+                // Final response - Show this!
+                const content = event.content || event.data?.content || event.text || '';
+                if (content) {
+                  // Format markdown-like syntax
+                  const formatted = content
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/`(.*?)`/g, '<code>$1</code>')
+                    .replace(/\n/g, '<br>');
+                    
+                  addMessage(formatted);
+                  statusBadge.innerText = 'Completed';
+                  statusBadge.classList.add('completed');
+                }
+              } else if (event.type === 'error') {
+                addMessage('<span style="color: #ff5f5f">Error: ' + (event.error || event.data?.message || 'Unknown error') + '</span>', 'assistant');
+                statusBadge.innerText = 'Error';
+              }
+            } catch (e) {
+              // Skip invalid JSON lines
+              console.warn('Failed to parse event:', line, e);
+            }
+          }
+        }
+        
+        // If no response was shown, show a default message
+        if (expandedList.children.length === 0) {
+          addMessage('Task completed.', 'assistant');
+        }
+        
+      } catch (e) {
+        addMessage('Error: ' + e.message, 'assistant');
+        statusBadge.innerText = 'Error';
+      }
+      
+      setThinking(false);
+      setTimeout(() => {
+        chatInput.placeholder = "Type a command or ask a question...";
+      }, 3000);
+    }
+    
+    // ===== Event Listeners =====
+    chatInput.addEventListener('input', (e) => {
+      const value = e.target.value;
+      
+      if (value.startsWith('/')) {
+        const filter = value.slice(1);
+        showCommandPalette(filter);
+      } else {
+        hideCommandPalette();
+      }
+    });
+    
+    chatInput.addEventListener('keydown', (e) => {
+      const paletteVisible = commandPalette.style.display === 'block';
+      
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+      } else if (paletteVisible && e.key === 'ArrowDown') {
+        e.preventDefault();
+        const items = commandPalette.querySelectorAll('.command-item');
+        selectedCommandIndex = Math.min(selectedCommandIndex + 1, items.length - 1);
+        showCommandPalette(chatInput.value.slice(1));
+      } else if (paletteVisible && e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedCommandIndex = Math.max(selectedCommandIndex - 1, 0);
+        showCommandPalette(chatInput.value.slice(1));
+      } else if (paletteVisible && e.key === 'Escape') {
+        e.preventDefault();
+        hideCommandPalette();
+      } else if (paletteVisible && e.key === 'Tab') {
+        e.preventDefault();
+        const items = commandPalette.querySelectorAll('.command-item');
+        if (items[selectedCommandIndex]) {
+          chatInput.value = items[selectedCommandIndex].dataset.command;
+        }
+      }
+    });
+    
+    settingsBtn.addEventListener('click', () => {
+      if (window.settingsAPI && window.settingsAPI.open) {
+        window.settingsAPI.open();
+      }
+    });
+    
+  </script>
+</body>
+</html>

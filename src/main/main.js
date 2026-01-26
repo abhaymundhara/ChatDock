@@ -36,7 +36,7 @@ function getHotkey() {
 }
 
 function getIndexHtmlPath() {
-  return path.join(__dirname, "../renderer/Index.html");
+  return path.join(__dirname, "../renderer/ace-interface.html");
 }
 
 function buildServerEnv({ port, model, base }) {
@@ -74,8 +74,22 @@ function startServer({ port, model, base }) {
   }
   const appPath =
     app && typeof app.getAppPath === "function" ? app.getAppPath() : __dirname;
-  const serverPath = path.join(appPath, "src/server/server.js");
+  
+  // Use orchestrator server for full agentic capabilities (45+ tools)
+  const serverPath = path.join(appPath, "src/server/server-orchestrator.js");
+  
+  console.log('[main] Starting orchestrator server with agentic tools...');
   serverProcess = fork(serverPath, [], { env, stdio: "inherit" });
+  
+  serverProcess.on('error', (err) => {
+    console.error('[main] Server process error:', err);
+  });
+  
+  serverProcess.on('exit', (code, signal) => {
+    if (code !== 0 && code !== null) {
+      console.error(`[main] Server exited with code ${code}`);
+    }
+  });
 }
 
 function showErrorWindow(message) {
@@ -108,7 +122,7 @@ function createMainWindow() {
   const isLinux = process.platform === "linux";
   win = new BrowserWindow({
     width: 700,
-    height: 300,
+    height: 500,
     frame: false,
     transparent: !isLinux,
     alwaysOnTop: true,
@@ -312,6 +326,14 @@ if (app && typeof app.whenReady === "function") {
   electron.ipcMain.handle("settings:minimize", () => {
     if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.minimize();
     return true;
+  });
+  
+  // Handle open-settings event from renderer
+  electron.ipcMain.on("open-settings", () => {
+    if (win && win.isVisible()) {
+      win.hide();
+    }
+    createSettingsWindow();
   });
 
   app.on("will-quit", () => {

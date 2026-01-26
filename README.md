@@ -36,7 +36,12 @@ A minimal, floating, always-on-top desktop chat bar for local AI. ChatDock uses 
 ```bash
 git clone https://github.com/abhaymundhara/ChatDock.git
 cd ChatDock
+
+# Using npm
 npm install
+
+# Using bun
+bun install
 ```
 
 ---
@@ -44,7 +49,11 @@ npm install
 ## 🧪 Development
 
 ```bash
-npm run dev   # Starts Electron (server auto-starts)
+# Using npm
+npm run dev
+
+# Using bun
+bun run dev
 ```
 
 ---

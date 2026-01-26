@@ -2,67 +2,70 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Settings</title>
     <link rel="stylesheet" href="../styles/settings.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
   </head>
   <body>
+    <!-- Close on click outside simulation -->
     <div class="window">
-      <header class="titlebar" id="titlebar">
-        <div class="title">ChatDock Settings</div>
-        <div class="actions">
-          <button class="btn icon" id="minBtn" aria-label="Minimize">—</button>
-          <button class="btn icon" id="closeBtn" aria-label="Close">×</button>
-        </div>
+      <header class="titlebar">
+        <div class="title">Settings</div>
       </header>
 
       <main class="content">
-        <section class="card">
-          <h2>Hotkey</h2>
-          <p class="muted">
-            Change the global hotkey used to toggle the chat bar.
-          </p>
-          <div class="row">
-            <input
-              id="hotkeyInput"
-              type="text"
-              placeholder="CommandOrControl+Shift+Space"
-            />
-            <button id="saveHotkey" class="btn primary">Save</button>
+        <!-- General -->
+        <div class="section">
+          <h2>General</h2>
+          <div class="form-group">
+            <label>Global Hotkey</label>
+            <input id="hotkeyInput" type="text" class="hotkey-input" placeholder="Click to record hotkey..." />
+            <div class="description">CommandOrControl+Shift+Space by default</div>
           </div>
-          <div id="hotkeyStatus" class="status"></div>
-        </section>
+        </div>
 
-        <section class="card">
-          <h2>System Prompt</h2>
-          <p class="muted">This prompt is prepended to every request.</p>
-          <textarea
-            id="promptInput"
-            rows="4"
-            placeholder="You are a helpful assistant..."
-          ></textarea>
-        </section>
-
-        <section class="card">
-          <h2>Temperature</h2>
-          <p class="muted">Controls creativity (0.0–2.0).</p>
-          <div class="row">
-            <input id="tempRange" type="range" min="0" max="2" step="0.1" />
-            <span id="tempValue">0.7</span>
-            <button id="saveTemp" class="btn">Save</button>
+        <!-- AI Configuration -->
+        <div class="section">
+          <h2>Intelligence</h2>
+          
+          <div class="form-group">
+            <label>System Prompt</label>
+            <textarea id="promptInput" placeholder="You are a helpful assistant..."></textarea>
+            <div class="description">Core instructions linked to every request.</div>
           </div>
-        </section>
-
-        <section class="card">
-          <div class="row end">
-            <button id="saveAll" class="btn primary">Save All</button>
+          
+          <div class="form-group">
+            <label>Creativity</label>
+            <div class="range-wrapper">
+              <input id="tempRange" type="range" min="0" max="2" step="0.1" />
+              <span id="tempValue" class="range-value">0.7</span>
+            </div>
           </div>
-        </section>
+        </div>
       </main>
+      
+      <div class="footer">
+        <button id="saveAll" class="btn primary">Save Changes</button>
+      </div>
 
-      <div id="toast" class="toast">Saved</div>
+      <div id="toast" class="toast">Settings Saved</div>
     </div>
 
     <script src="../../server/utils/settings.js"></script>
+    <script>
+      // Slider Logic
+      const range = document.getElementById('tempRange');
+      const value = document.getElementById('tempValue');
+      range.addEventListener('input', (e) => {
+        value.textContent = e.target.value;
+      });
+      
+      // Close on escape
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          // Send close event if possible, or just let default behavior handle it
+        }
+      });
+    </script>
   </body>
 </html>

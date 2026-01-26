@@ -40,23 +40,11 @@ function saveLastModel(name) {
 const PULLING_MODELS = new Set();
 /* ================================= */
 
-// Load system prompt from file (optional)
-const PROMPT_PATH = path.join(__dirname, "../../assets/prompt.txt");
-let SYSTEM_PROMPT = "";
-try {
-  SYSTEM_PROMPT = fs.readFileSync(PROMPT_PATH, "utf-8");
-  if (SYSTEM_PROMPT.trim().length === 0) {
-    console.warn(
-      "[server] prompt.txt is empty; continuing without a system prompt",
-    );
-  } else {
-    console.log("[server] Loaded system prompt from prompt.txt");
-  }
-} catch {
-  console.warn(
-    "[server] No prompt.txt found; continuing without a system prompt",
-  );
-}
+// Load system prompt from Brain via PromptBuilder
+const { PromptBuilder } = require("./orchestrator/prompt-builder");
+const promptBuilder = new PromptBuilder();
+const SYSTEM_PROMPT = promptBuilder.build();
+console.log("[server] Loaded system prompt from Brain");
 
 const app = express();
 app.use(cors());
