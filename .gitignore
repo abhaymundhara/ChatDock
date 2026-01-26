@@ -33,6 +33,14 @@ last_model.txt
 
 IMPLEMENTATION_NOTES.md
 TEST_SCENARIOS.md
+Documentation.md
+AGENTIC_LOOP_IMPLEMENTATION.md
+AGENTIC_LOOP_MIGRATION.md
+
+
 
 # Bun
 .bun/
+Memory/user.md
+Memory/chatdock.md
+docs/PLANNING_ENFORCEMENT.md
