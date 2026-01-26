@@ -127,6 +127,16 @@ describe('PromptBuilder', () => {
     assert.ok(!prompt.includes('todo_write'));
   });
 
+  it('enforces task_write before tool_finder in workflow text', () => {
+    const prompt = builder.build();
+    const taskIndex = prompt.indexOf('task_write');
+    const finderIndex = prompt.indexOf('tool_finder');
+    assert.ok(taskIndex !== -1);
+    assert.ok(finderIndex !== -1);
+    assert.ok(taskIndex < finderIndex);
+    assert.ok(!prompt.includes('tool_search'));
+  });
+
   it('should include tools in prompt', () => {
     const prompt = builder.build({
       tools: [{ name: 'test', description: 'test tool', parameters: {} }]
@@ -191,5 +201,39 @@ describe('Orchestrator', () => {
     
     orch.clearHistory();
     assert.strictEqual(orch.getHistory().length, 0);
+  });
+});
+
+describe('Workflow Enforcement', () => {
+  const orchestrator = new Orchestrator();
+
+  it('requires task_write before any non-planning tool', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [{ function: { name: 'tool_finder' } }],
+      { hasTaskPlan: false, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'task_write_required');
+  });
+
+  it('requires tool_finder before non-planning tools', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [{ function: { name: 'read_file' } }],
+      { hasTaskPlan: true, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'tool_finder_required');
+  });
+
+  it('rejects tool_finder bundled with execution tools', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [
+        { function: { name: 'tool_finder' } },
+        { function: { name: 'read_file' } }
+      ],
+      { hasTaskPlan: true, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'tool_finder_only');
   });
 });
