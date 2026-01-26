@@ -9,11 +9,14 @@ const os = require("node:os");
 
 class MemoryManager {
   constructor(options = {}) {
-    // Memory directory: ~/ChatDock/Memory/
-    this.memoryDir =
-      options.memoryDir || path.join(os.homedir(), "ChatDock", "Memory");
+    // Workspace path defaults to app path (Clawdbot-style)
+    this.appPath =
+      options.appPath || process.env.CHATDOCK_APP_PATH || process.cwd();
+    this.memoryDir = options.memoryDir || path.join(this.appPath, "Memory");
     this.userMemoryFile = path.join(this.memoryDir, "user.md");
     this.systemMemoryFile = path.join(this.memoryDir, "chatdock.md");
+    this.dailyDir = path.join(this.memoryDir, "daily");
+    this.longTermFile = path.join(this.memoryDir, "MEMORY.md");
 
     // In-memory cache
     this.userMemory = null;
@@ -32,6 +35,16 @@ class MemoryManager {
       if (!fs.existsSync(this.memoryDir)) {
         fs.mkdirSync(this.memoryDir, { recursive: true });
         console.log(`[memory] Created memory directory: ${this.memoryDir}`);
+      }
+
+      if (!fs.existsSync(this.dailyDir)) {
+        fs.mkdirSync(this.dailyDir, { recursive: true });
+        console.log(`[memory] Created daily logs directory: ${this.dailyDir}`);
+      }
+
+      if (!fs.existsSync(this.longTermFile)) {
+        fs.writeFileSync(this.longTermFile, "# Long-term Memory\n\n", "utf-8");
+        console.log(`[memory] Created long-term memory: ${this.longTermFile}`);
       }
 
       // Create user.md if it doesn't exist
@@ -128,17 +141,62 @@ You are ChatDock, a local AI assistant running on the user's machine.
    * @returns {string}
    */
   getCombinedMemory() {
-    const user = this.getUserMemory();
-    const system = this.getSystemMemory();
+    return this.getClawdbotContext();
+  }
 
-    return `## Persistent Memory
+  _getDailyLogPath(date) {
+    const dateString = date.toISOString().split("T")[0];
+    return path.join(this.dailyDir, `${dateString}.md`);
+  }
 
-### User Context
-${user}
+  _ensureFile(filePath, content) {
+    if (!fs.existsSync(filePath)) {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, content, "utf-8");
+    }
+  }
 
-### System Context
-${system}
-`;
+  _ensureDailyLog(date) {
+    const filePath = this._getDailyLogPath(date);
+    if (!fs.existsSync(filePath)) {
+      const label = date.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      this._ensureFile(filePath, `# Daily Log - ${label}\n`);
+    }
+    return filePath;
+  }
+
+  /**
+   * Clawdbot-style memory context (MEMORY.md + today/yesterday logs)
+   * @returns {string}
+   */
+  getClawdbotContext() {
+    this._ensureFile(this.longTermFile, "# Long-term Memory\n\n");
+    const longTerm = fs.readFileSync(this.longTermFile, "utf-8");
+
+    const today = new Date();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const todayPath = this._ensureDailyLog(today);
+    const yesterdayPath = this._ensureDailyLog(yesterday);
+
+    const todayLog = fs.readFileSync(todayPath, "utf-8");
+    const yesterdayLog = fs.readFileSync(yesterdayPath, "utf-8");
+
+    return [
+      "## Clawdbot Memory",
+      "### MEMORY.md",
+      longTerm.trim(),
+      "### Daily Logs",
+      todayLog.trim(),
+      yesterdayLog.trim(),
+    ].join("\n\n");
   }
 
   /**
