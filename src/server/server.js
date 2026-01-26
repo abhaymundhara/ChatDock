@@ -5,7 +5,7 @@ const cors = require("cors");
 const fs = require("node:fs");
 const path = require("node:path");
 const { execSync } = require("node:child_process");
-const { chooseModel } = require("../renderer/components/model-selection");
+const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { loadSettings } = require("./utils/settings-store");
 
