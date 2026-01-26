@@ -61,11 +61,15 @@ function isAuthorized(token, apiKey) {
 
 function createAuthMiddleware({ apiKey, allowedIps }) {
   const allowedList = parseAllowedIps(allowedIps || '');
+  const allowLocalUnauth = process.env.CHATDOCK_ALLOW_LOCAL_UNAUTH !== 'false';
   return (req, res, next) => {
     if (req.path === '/health') return next();
     const ip = normalizeIp(req.ip || req.socket?.remoteAddress || '');
     if (!isIpAllowed(ip, allowedList)) {
       return res.status(403).json({ error: 'IP not allowed' });
+    }
+    if (allowLocalUnauth && ip === '127.0.0.1') {
+      return next();
     }
     const token = getBearerToken(req.headers?.authorization);
     if (!isAuthorized(token, apiKey)) {
