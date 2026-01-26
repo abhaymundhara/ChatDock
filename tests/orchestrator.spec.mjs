@@ -4,6 +4,9 @@
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { 
   Orchestrator, 
   OllamaClient, 
@@ -137,6 +140,17 @@ describe('PromptBuilder', () => {
     });
     assert.ok(prompt.includes('/home/user'));
     assert.ok(prompt.includes('main'));
+  });
+
+  it('should honor CHATDOCK_APP_PATH when provided', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatdock-brain-'));
+    const brainDir = path.join(tmp, 'brain');
+    fs.mkdirSync(brainDir, { recursive: true });
+    fs.writeFileSync(path.join(brainDir, 'AGENTS.md'), 'TEST_BRAIN_MARKER');
+    process.env.CHATDOCK_APP_PATH = tmp;
+    const envBuilder = new PromptBuilder();
+    const prompt = envBuilder.build();
+    assert.ok(prompt.includes('TEST_BRAIN_MARKER'));
   });
 });
 

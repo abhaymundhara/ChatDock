@@ -10,7 +10,8 @@ const os = require("node:os");
 class PromptBuilder {
   constructor(options = {}) {
     // UPDATED: Load brain from project folder instead of home directory
-    this.brainDir = options.brainDir || path.join(process.cwd(), "brain");
+    const appPath = process.env.CHATDOCK_APP_PATH || process.cwd();
+    this.brainDir = options.brainDir || path.join(appPath, "brain");
     this.basePrompt = this.loadBrain() || this.getDefaultBasePrompt();
     this.thinkingMode = options.thinkingMode || "balanced";
   }
