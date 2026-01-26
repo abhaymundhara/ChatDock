@@ -4,21 +4,84 @@
  */
 
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 // In-memory plan storage (also persisted to file)
-let currentPlan = null;
-const PLAN_FILE = path.join(
-  process.env.HOME || "",
-  ".chatdock",
-  "current_plan.json",
-);
+let currentTasks = null;
+let currentTasksDir = null;
+
+function getTasksDir() {
+  return process.env.CHATDOCK_USER_DATA || path.join(os.homedir(), ".chatdock");
+}
+
+function getTasksFile() {
+  return path.join(getTasksDir(), "current_tasks.json");
+}
+
+function getLegacyPlanFile() {
+  return path.join(getTasksDir(), "current_plan.json");
+}
+
+function computeDependencies(tasks) {
+  const deps = {};
+  tasks.forEach((task) => {
+    deps[task.id] = Array.isArray(task.dependsOn) ? task.dependsOn : [];
+  });
+  return deps;
+}
+
+function normalizeTask(input, index, existing = null) {
+  const id = input.id || existing?.id || `task_${index + 1}`;
+  const taskText = input.task ?? input.title ?? existing?.task ?? "";
+  const status = input.status || existing?.status || "pending";
+  const dependsOn = Array.isArray(input.dependsOn)
+    ? input.dependsOn
+    : existing?.dependsOn || [];
+  const notes = input.notes ?? existing?.notes;
+
+  return {
+    id,
+    task: taskText,
+    status,
+    dependsOn,
+    ...(notes !== undefined ? { notes } : {}),
+  };
+}
+
+function loadTasksFromDisk() {
+  const tasksFile = getTasksFile();
+  if (fs.existsSync(tasksFile)) {
+    return JSON.parse(fs.readFileSync(tasksFile, "utf-8"));
+  }
+  const legacyFile = getLegacyPlanFile();
+  if (fs.existsSync(legacyFile)) {
+    const legacy = JSON.parse(fs.readFileSync(legacyFile, "utf-8"));
+    const normalized = (legacy.tasks || []).map((taskInput, index) =>
+      normalizeTask(taskInput, index),
+    );
+    const migrated = {
+      title: legacy.title || "Current Plan",
+      createdAt: legacy.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      tasks: normalized,
+      dependencies: computeDependencies(normalized),
+    };
+    const dir = path.dirname(tasksFile);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(tasksFile, JSON.stringify(migrated, null, 2));
+    return migrated;
+  }
+  return null;
+}
 
 /**
- * todo_write - Create or update a task plan
+ * task_write - Create or update a task plan
  */
-const todo_write = {
-  name: "todo_write",
+const task_write = {
+  name: "task_write",
   description:
     "Creates or updates a task list/plan for the current request. Helps organize complex multi-step tasks.",
   parameters: {
@@ -28,6 +91,12 @@ const todo_write = {
         type: "string",
         description: "Title of the plan",
       },
+      mode: {
+        type: "string",
+        enum: ["replace", "append"],
+        description: "Replace all tasks or append/merge by id",
+        default: "replace",
+      },
       tasks: {
         type: "array",
         items: {
@@ -35,11 +104,18 @@ const todo_write = {
           properties: {
             id: { type: "string" },
             task: { type: "string" },
+            title: { type: "string" },
             status: {
               type: "string",
               enum: ["pending", "in_progress", "completed", "blocked"],
               default: "pending",
             },
+            dependsOn: {
+              type: "array",
+              items: { type: "string" },
+              description: "Task ids this task depends on",
+            },
+            notes: { type: "string" },
           },
         },
         description: "Array of tasks",
@@ -47,82 +123,131 @@ const todo_write = {
     },
     required: ["tasks"],
   },
-  keywords: ["todo", "plan", "task", "list", "organize"],
+  keywords: ["task", "plan", "list", "organize"],
 
-  run: async ({ title, tasks }) => {
-    currentPlan = {
-      title: title || "Current Plan",
-      createdAt: new Date().toISOString(),
-      tasks: tasks.map((t, i) => ({
-        id: t.id || `task_${i + 1}`,
-        task: t.task,
-        status: t.status || "pending",
-      })),
-    };
+  run: async ({ title, tasks, mode = "replace" }) => {
+    const tasksDir = getTasksDir();
+    if (currentTasksDir && currentTasksDir !== tasksDir) {
+      currentTasks = null;
+    }
+
+    if (mode === "append" && !currentTasks) {
+      currentTasks = loadTasksFromDisk();
+    }
+
+    if (mode === "append" && currentTasks?.tasks?.length) {
+      const existingById = new Map(
+        currentTasks.tasks.map((task) => [task.id, task]),
+      );
+      let nextId = currentTasks.tasks.length + 1;
+      tasks.forEach((taskInput, index) => {
+        const inputWithId = taskInput.id
+          ? taskInput
+          : { ...taskInput, id: `task_${nextId++}` };
+        const existing = inputWithId.id
+          ? existingById.get(inputWithId.id)
+          : null;
+        if (existing) {
+          const updated = normalizeTask(inputWithId, index, existing);
+          existingById.set(existing.id, updated);
+        } else {
+          const created = normalizeTask(inputWithId, index, null);
+          existingById.set(created.id, created);
+        }
+      });
+      const mergedTasks = Array.from(existingById.values());
+      currentTasks = {
+        title: title || currentTasks.title || "Current Plan",
+        createdAt: currentTasks.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tasks: mergedTasks,
+        dependencies: computeDependencies(mergedTasks),
+      };
+      currentTasksDir = tasksDir;
+    } else {
+      const normalized = tasks.map((taskInput, index) =>
+        normalizeTask(taskInput, index),
+      );
+      currentTasks = {
+        title: title || "Current Plan",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tasks: normalized,
+        dependencies: computeDependencies(normalized),
+      };
+      currentTasksDir = tasksDir;
+    }
 
     // Persist to file
     try {
-      const dir = path.dirname(PLAN_FILE);
+      const filePath = getTasksFile();
+      const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(PLAN_FILE, JSON.stringify(currentPlan, null, 2));
+      fs.writeFileSync(filePath, JSON.stringify(currentTasks, null, 2));
     } catch {}
 
     // Log the plan creation
-    console.log(`[todo_write] 📋 Plan created: "${currentPlan.title}"`);
-    console.log(`[todo_write] Tasks:`);
-    currentPlan.tasks.forEach((task, i) => {
+    console.log(`[task_write] 📋 Plan created: "${currentTasks.title}"`);
+    console.log(`[task_write] Tasks:`);
+    currentTasks.tasks.forEach((task, i) => {
       console.log(`  ${i + 1}. [${task.status}] ${task.task}`);
     });
 
     return {
       success: true,
-      title: currentPlan.title,
-      taskCount: currentPlan.tasks.length,
-      tasks: currentPlan.tasks,
+      title: currentTasks.title,
+      taskCount: currentTasks.tasks.length,
+      tasks: currentTasks.tasks,
+      dependencies: currentTasks.dependencies,
+      updatedAt: currentTasks.updatedAt,
     };
   },
 };
 
 /**
- * todo_read - Read the current plan
+ * task_read - Read the current plan
  */
-const todo_read = {
-  name: "todo_read",
+const task_read = {
+  name: "task_read",
   description: "Reads the current task list/plan.",
   parameters: {
     type: "object",
     properties: {},
   },
-  keywords: ["todo", "plan", "read", "list"],
+  keywords: ["task", "plan", "read", "list"],
 
   run: async () => {
-    if (!currentPlan) {
+    const tasksDir = getTasksDir();
+    if (currentTasksDir && currentTasksDir !== tasksDir) {
+      currentTasks = null;
+    }
+
+    if (!currentTasks) {
       // Try to load from file
       try {
-        if (fs.existsSync(PLAN_FILE)) {
-          currentPlan = JSON.parse(fs.readFileSync(PLAN_FILE, "utf-8"));
-        }
+        currentTasks = loadTasksFromDisk();
+        currentTasksDir = currentTasks ? tasksDir : null;
       } catch {}
     }
 
-    if (!currentPlan) {
+    if (!currentTasks) {
       return { hasPlan: false, message: "No active plan" };
     }
 
     return {
       hasPlan: true,
-      ...currentPlan,
+      ...currentTasks,
     };
   },
 };
 
 /**
- * todo_update - Update a task status
+ * task_update - Update a task status
  */
-const todo_update = {
-  name: "todo_update",
+const task_update = {
+  name: "task_update",
   description: "Updates the status of a specific task in the current plan.",
   parameters: {
     type: "object",
@@ -139,29 +264,31 @@ const todo_update = {
     },
     required: ["taskId", "status"],
   },
-  keywords: ["todo", "update", "status", "complete"],
+  keywords: ["task", "update", "status", "complete"],
 
   run: async ({ taskId, status }) => {
-    if (!currentPlan) {
+    if (!currentTasks) {
       throw new Error("No active plan");
     }
 
-    const task = currentPlan.tasks.find((t) => t.id === taskId);
+    const task = currentTasks.tasks.find((t) => t.id === taskId);
     if (!task) {
       throw new Error(`Task not found: ${taskId}`);
     }
 
     task.status = status;
+    currentTasks.updatedAt = new Date().toISOString();
+    currentTasks.dependencies = computeDependencies(currentTasks.tasks);
 
     // Persist
     try {
-      fs.writeFileSync(PLAN_FILE, JSON.stringify(currentPlan, null, 2));
+      fs.writeFileSync(getTasksFile(), JSON.stringify(currentTasks, null, 2));
     } catch {}
 
     return {
       updated: taskId,
       newStatus: status,
-      plan: currentPlan,
+      plan: currentTasks,
     };
   },
 };
@@ -306,9 +433,9 @@ const summarize_context = {
 };
 
 module.exports = {
-  todo_write,
-  todo_read,
-  todo_update,
+  task_write,
+  task_read,
+  task_update,
   ask_user,
   think,
   summarize_context,
