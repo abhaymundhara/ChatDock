@@ -5,7 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync, spawn } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const { resolvePath } = require('./utility');
 
 /**
@@ -71,9 +71,12 @@ const grep_search = {
       
       // Exclude common non-relevant directories
       flags.push('--glob=!node_modules', '--glob=!.git', '--glob=!dist', '--glob=!build');
-      
-      const command = `rg ${flags.join(' ')} "${pattern}" "${absolutePath}" 2>/dev/null | head -${maxResults}`;
-      const output = execSync(command, { encoding: 'utf-8', maxBuffer: 5 * 1024 * 1024 });
+
+      const rgArgs = [...flags, '--', pattern, absolutePath];
+      const output = execFileSync('rg', rgArgs, {
+        encoding: 'utf-8',
+        maxBuffer: 5 * 1024 * 1024
+      });
       
       for (const line of output.split('\n').filter(Boolean)) {
         const match = line.match(/^(.+?):(\d+):(.*)$/);
@@ -88,9 +91,12 @@ const grep_search = {
     } catch {
       // Fallback to grep
       try {
-        const flags = ignoreCase ? '-rni' : '-rn';
-        const command = `grep ${flags} "${pattern}" "${absolutePath}" 2>/dev/null | head -${maxResults}`;
-        const output = execSync(command, { encoding: 'utf-8', maxBuffer: 5 * 1024 * 1024 });
+        const flags = ignoreCase ? ['-rni'] : ['-rn'];
+        const grepArgs = [...flags, '-m', String(maxResults), '--', pattern, absolutePath];
+        const output = execFileSync('grep', grepArgs, {
+          encoding: 'utf-8',
+          maxBuffer: 5 * 1024 * 1024
+        });
         
         for (const line of output.split('\n').filter(Boolean)) {
           const match = line.match(/^(.+?):(\d+):(.*)$/);
@@ -142,8 +148,10 @@ const web_search = {
   run: async ({ query, maxResults = 5 }) => {
     // Try ddgr CLI first
     try {
-      const command = `ddgr --json -n ${maxResults} "${query}" 2>/dev/null`;
-      const output = execSync(command, { encoding: 'utf-8', timeout: 15000 });
+      const output = execFileSync('ddgr', ['--json', '-n', String(maxResults), query], {
+        encoding: 'utf-8',
+        timeout: 15000
+      });
       const results = JSON.parse(output);
       
       return {
@@ -161,8 +169,11 @@ const web_search = {
         const encodedQuery = encodeURIComponent(query);
         const url = `https://html.duckduckgo.com/html/?q=${encodedQuery}`;
         
-        const curlCommand = `curl -s -A "Mozilla/5.0" "${url}" 2>/dev/null`;
-        const html = execSync(curlCommand, { encoding: 'utf-8', timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
+        const html = execFileSync(
+          'curl',
+          ['-s', '-A', 'Mozilla/5.0', url],
+          { encoding: 'utf-8', timeout: 15000, maxBuffer: 2 * 1024 * 1024 }
+        );
         
         // Simple regex extraction of results
         const results = [];
@@ -235,12 +246,15 @@ const fetch_url = {
     
     try {
       // Use curl to fetch the page
-      const curlCommand = `curl -s -L -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" "${url}" 2>/dev/null`;
-      const html = execSync(curlCommand, { 
-        encoding: 'utf-8', 
-        timeout: 30000, 
-        maxBuffer: 5 * 1024 * 1024 
-      });
+      const html = execFileSync(
+        'curl',
+        ['-s', '-L', '-A', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', url],
+        {
+          encoding: 'utf-8',
+          timeout: 30000,
+          maxBuffer: 5 * 1024 * 1024
+        }
+      );
       
       // Convert HTML to readable text
       const text = htmlToText(html);
