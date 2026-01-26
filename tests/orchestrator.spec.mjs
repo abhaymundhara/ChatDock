@@ -193,3 +193,37 @@ describe('Orchestrator', () => {
     assert.strictEqual(orch.getHistory().length, 0);
   });
 });
+
+describe('Workflow Enforcement', () => {
+  const orchestrator = new Orchestrator();
+
+  it('requires task_write before any non-planning tool', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [{ function: { name: 'tool_finder' } }],
+      { hasTaskPlan: false, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'task_write_required');
+  });
+
+  it('requires tool_finder before non-planning tools', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [{ function: { name: 'read_file' } }],
+      { hasTaskPlan: true, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'tool_finder_required');
+  });
+
+  it('rejects tool_finder bundled with execution tools', () => {
+    const violation = orchestrator.getWorkflowViolation(
+      [
+        { function: { name: 'tool_finder' } },
+        { function: { name: 'read_file' } }
+      ],
+      { hasTaskPlan: true, hasToolFinder: false }
+    );
+    assert.ok(violation);
+    assert.strictEqual(violation.type, 'tool_finder_only');
+  });
+});
