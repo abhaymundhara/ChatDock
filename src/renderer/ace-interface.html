@@ -65,6 +65,9 @@
 
       <!-- Expanded Content -->
       <div class="expanded-content" id="expandedList">
+        <div class="workflow-strip" id="workflowStrip" style="display: none">
+          <div class="workflow-steps" id="workflowSteps"></div>
+        </div>
         <div class="tasks-strip" id="tasksStrip" style="display: none">
           <div class="tasks-list" id="tasksList"></div>
         </div>
@@ -90,6 +93,8 @@
       const chatInput = document.getElementById("chatInput");
       const expandedList = document.getElementById("expandedList");
       const messagesList = document.getElementById("messagesList");
+      const workflowStrip = document.getElementById("workflowStrip");
+      const workflowSteps = document.getElementById("workflowSteps");
       const tasksStrip = document.getElementById("tasksStrip");
       const tasksList = document.getElementById("tasksList");
       const mainIcon = document.getElementById("mainIcon");
@@ -104,6 +109,17 @@
       let selectedCommandIndex = 0;
       let currentTasks = [];
       let currentDependencies = {};
+      const WORKFLOW_STEPS = [
+        { key: "tasks", label: "Tasks" },
+        { key: "tool_finder", label: "ToolFinder" },
+        { key: "tool_call", label: "Tool Call" },
+      ];
+      const WORKFLOW_STATUSES = ["pending", "active", "complete"];
+      const PLANNING_TOOLS = new Set(["task_write", "think", "ask_user"]);
+      let workflowState = WORKFLOW_STEPS.reduce((acc, step) => {
+        acc[step.key] = "pending";
+        return acc;
+      }, {});
 
       // ===== Available Commands =====
       const COMMANDS = [
@@ -174,6 +190,57 @@
 
       function hasTasks() {
         return currentTasks.length > 0;
+      }
+
+      function resetWorkflow() {
+        workflowState = WORKFLOW_STEPS.reduce((acc, step) => {
+          acc[step.key] = "pending";
+          return acc;
+        }, {});
+        renderWorkflow();
+      }
+
+      function updateWorkflow(stepKey, status) {
+        if (!workflowState[stepKey]) return;
+        if (!WORKFLOW_STATUSES.includes(status)) return;
+        workflowState[stepKey] = status;
+        renderWorkflow();
+      }
+
+      function renderWorkflow() {
+        const hasProgress = WORKFLOW_STEPS.some(
+          (step) => workflowState[step.key] !== "pending",
+        );
+
+        if (!hasProgress) {
+          workflowStrip.style.display = "none";
+          return;
+        }
+
+        workflowStrip.style.display = "block";
+        workflowSteps.innerHTML = "";
+
+        WORKFLOW_STEPS.forEach((step) => {
+          const status = workflowState[step.key];
+          const stepEl = document.createElement("div");
+          stepEl.className = "workflow-step";
+          if (status === "active") stepEl.classList.add("is-active");
+          if (status === "complete") stepEl.classList.add("is-complete");
+
+          const tick = document.createElement("span");
+          tick.className = "step-tick";
+          tick.textContent = status === "complete" ? "✓" : "";
+
+          const label = document.createElement("span");
+          label.className = "step-label";
+          label.textContent = step.label;
+
+          stepEl.appendChild(tick);
+          stepEl.appendChild(label);
+          workflowSteps.appendChild(stepEl);
+        });
+
+        expand(true);
       }
 
       function updateTaskState(taskId, updates) {
@@ -576,6 +643,7 @@
         }
 
         setThinking(true);
+        resetWorkflow();
         messagesList.innerHTML = "";
         if (!hasTasks()) {
           expand(false);
@@ -629,17 +697,48 @@
                       event.state.slice(1) +
                       "...";
                   }
+                } else if (event.type === "workflow") {
+                  const step = event.data?.step;
+                  const status = event.data?.status;
+                  const steps = event.data?.steps;
+
+                  if (step && status) {
+                    updateWorkflow(step, status);
+                  } else if (steps && typeof steps === "object") {
+                    Object.entries(steps).forEach(([key, value]) => {
+                      updateWorkflow(key, value);
+                    });
+                  }
                 } else if (event.type === "tool_start") {
                   // Tool execution started - Update badge only, don't show in list
-                  statusBadge.innerText = `Running ${event.tool || "tool"}...`;
+                  const toolName = event.tool || event.data?.name || "tool";
+                  statusBadge.innerText = `Running ${toolName}...`;
                   statusBadge.style.display = "flex";
+
+                  if (toolName === "task_write") {
+                    updateWorkflow("tasks", "active");
+                  } else if (toolName === "tool_finder") {
+                    updateWorkflow("tool_finder", "active");
+                  } else if (!PLANNING_TOOLS.has(toolName)) {
+                    updateWorkflow("tool_call", "active");
+                  }
                 } else if (event.type === "tool_result") {
                   // Tool completed - just log to console for debug
                   console.log("Tool result:", event.data);
+                  const toolName = event.data?.name;
+
+                  if (toolName === "task_write") {
+                    updateWorkflow("tasks", "complete");
+                  } else if (toolName === "tool_finder") {
+                    updateWorkflow("tool_finder", "complete");
+                  } else if (toolName && !PLANNING_TOOLS.has(toolName)) {
+                    updateWorkflow("tool_call", "complete");
+                  }
                 } else if (event.type === "tasks") {
                   currentTasks = event.data?.tasks || [];
                   currentDependencies = event.data?.dependencies || {};
                   renderTasks();
+                  updateWorkflow("tasks", "complete");
                 } else if (
                   event.type === "response" ||
                   event.type === "content"
