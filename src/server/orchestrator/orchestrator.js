@@ -119,6 +119,13 @@ class Orchestrator {
     this.toolRetries.clear();
     this.currentPhase = AgenticPhase.ANALYZE;
 
+    // Initialize with provided conversation history for context continuity
+    if (context.conversationHistory && context.conversationHistory.length > 0) {
+      // Prepend provided history to maintain context across requests
+      this.conversationHistory = [...context.conversationHistory];
+      console.log(`[orchestrator] 📚 Loaded ${context.conversationHistory.length} messages from history`);
+    }
+
     // Add user message to history
     this.conversationHistory.push({
       role: "user",
@@ -362,12 +369,21 @@ class Orchestrator {
     const msg = userMessage.toLowerCase();
     const matchesAny = (patterns) => patterns.some((p) => p.test(msg));
 
-    // Simple queries: questions, info requests, greetings, URLs
+    // Very short messages are almost always simple follow-ups
+    const wordCount = userMessage.trim().split(/\s+/).length;
+    if (wordCount <= 8) {
+      console.log(`[orchestrator] ✓ Short message (${wordCount} words) - treating as simple`);
+      return false;
+    }
+
+    // Simple queries: questions, info requests, greetings, URLs, math
     const simplePatterns = [
       /^(what|who|when|where|why|how)\s/i,
       /^(tell me|show me|explain|describe)\s/i,
       /^(list|display|view)\s/i,
       /\b(hello|hi|hey|thanks|thank you)\b/i,
+      /^(add|subtract|multiply|divide|calculate)\s/i,
+      /^\d+\s*[\+\-\*\/]/i,
     ];
 
     if (
@@ -789,6 +805,14 @@ REQUIRED ACTION: Call tool_finder({ query: "..." }) only. Do not execute other t
       ...context,
       memory: this.memory.getCombinedMemory(),
     };
+
+    // Add relevant memories from semantic search (if available)
+    if (context.relevantMemories && context.relevantMemories.length > 0) {
+      const relevantSection = context.relevantMemories
+        .map((m) => `- ${m.content}`)
+        .join("\n");
+      memoryContext.relevantContext = `\n## Relevant Past Context\n${relevantSection}`;
+    }
 
     const basePrompt = this.promptBuilder.build({
       tools: this.tools.getDefinitions(),

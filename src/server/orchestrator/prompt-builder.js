@@ -258,6 +258,11 @@ ${toolList}`;
       parts.push(`\n${context.memory}`);
     }
 
+    // Add relevant past context from semantic search
+    if (context.relevantContext) {
+      parts.push(context.relevantContext);
+    }
+
     return parts.join("\n");
   }
 
