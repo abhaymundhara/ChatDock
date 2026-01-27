@@ -32,19 +32,12 @@ coverage/
 last_model.txt
 config/last_model.txt
 
-IMPLEMENTATION_NOTES.md
 TEST_SCENARIOS.md
-Documentation.md
 Documentation.MD
-AGENTIC_LOOP_IMPLEMENTATION.md
-AGENTIC_LOOP_MIGRATION.md
-
-
 
 # Bun
 .bun/
 
 # User-specific memory (auto-created on first run)
 Memory/
-
-docs/PLANNING_ENFORCEMENT.md
+docs/

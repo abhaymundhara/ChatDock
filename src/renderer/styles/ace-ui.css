@@ -66,6 +66,17 @@ body {
   transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   overflow: hidden;
   position: relative;
+  /* Make the bar draggable by default */
+  -webkit-app-region: drag;
+}
+
+/* Make inputs and buttons clickable (not draggable) */
+input,
+button,
+.expanded-content,
+.command-palette,
+.bar-icon {
+  -webkit-app-region: no-drag;
 }
 
 /* Input Row (Always Visible) */
@@ -428,15 +439,19 @@ body {
   }
 }
 
-/* Drag Handle */
+/* Drag Handle - REMOVED as we use the whole bar */
 .drag-handle {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 10px;
-  -webkit-app-region: drag;
-  z-index: 100;
+  display: none;
+}
+
+/* Ensure interactive elements aren't draggable */
+input,
+button,
+.expanded-content,
+.command-palette {
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: 10;
 }
 
 /* Command Palette */
