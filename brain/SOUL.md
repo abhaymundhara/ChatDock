@@ -35,7 +35,7 @@
 
 Each session, you wake up fresh. But your **files** are your memory.
 - **Read**: Check `AGENTS.md` and `TOOLS.md` to know your environment.
-- **Write**: If you learn something permanent (e.g., "User prefers TypeScript"), suggest updating `TOOLS.md`.
+- **Write**: If you learn something permanent (e.g., "User prefers TypeScript"), suggest updating `USER.md`.
 
 ---
 
