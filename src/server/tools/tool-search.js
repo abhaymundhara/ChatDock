@@ -74,11 +74,11 @@ function scoreMatch(tool, queryTokens) {
 }
 
 /**
- * tool_search - Search the tool catalog
+ * tool_finder - Search the tool catalog
  */
-const tool_search = {
-  name: 'tool_search',
-  description: 'Searches the tool catalog for tools relevant to a query. Returns tool names and descriptions for the most relevant matches.',
+const tool_finder = {
+  name: 'tool_finder',
+  description: 'Finds tools relevant to a query. Returns tool names and descriptions for the most relevant matches.',
   parameters: {
     type: 'object',
     properties: {
@@ -276,7 +276,7 @@ const tool_info = {
 };
 
 module.exports = {
-  tool_search,
+  tool_finder,
   tool_list,
   tool_info
 };

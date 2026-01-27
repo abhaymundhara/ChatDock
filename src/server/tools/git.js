@@ -3,7 +3,7 @@
  * Tools for interacting with Git repositories
  */
 
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -188,11 +188,15 @@ const git_log = {
     }
     
     try {
-      const format = oneline 
-        ? '--format=%h|%s|%an|%ar'
-        : '--format=%H%n%s%n%an <%ae>%n%ad%n%b%n---';
-      
-      const log = execSync(`git log -n ${count} ${format}`, { cwd: dir, encoding: 'utf-8' });
+      const format = oneline
+        ? '%h|%s|%an|%ar'
+        : '%H%n%s%n%an <%ae>%n%ad%n%b%n---';
+
+      const log = execFileSync(
+        'git',
+        ['log', '-n', String(count), `--format=${format}`],
+        { cwd: dir, encoding: 'utf-8' }
+      );
       
       if (oneline) {
         const commits = log.split('\n').filter(Boolean).map(line => {

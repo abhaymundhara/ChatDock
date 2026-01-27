@@ -5,7 +5,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 
 /**
  * read_file - Reads the full content of a file
@@ -271,29 +271,26 @@ const glob = {
     try {
       // Convert glob to find pattern
       let findPattern = pattern
-        .replace(/\*\*\//g, '') // Remove **/ 
-        .replace(/\*/g, '*');   // Keep single *
-      
+        .replace(/\*\*\//g, '') // Remove **/
+        .replace(/\*/g, '*'); // Keep single *
+
       // Extract extension if pattern is like *.js
       const extMatch = pattern.match(/\*\.(\w+)$/);
-      let command;
-      
-      if (extMatch) {
-        const ext = extMatch[1];
-        command = `find "${absoluteCwd}" -type f -name "*.${ext}" 2>/dev/null | head -100`;
-      } else {
-        command = `find "${absoluteCwd}" -type f -name "*${findPattern}*" 2>/dev/null | head -100`;
-      }
-      
-      // Add ignore patterns
+      const namePattern = extMatch
+        ? `*.${extMatch[1]}`
+        : `*${findPattern}*`;
+
+      const findArgs = ['.'];
       for (const ig of ignore) {
-        command = command.replace('find ', `find . -not -path "*/${ig}/*" `);
+        findArgs.push('-not', '-path', `*/${ig}/*`);
       }
-      
-      const result = execSync(command, { 
+      findArgs.push('-type', 'f', '-name', namePattern);
+
+      const result = execFileSync('find', findArgs, {
         encoding: 'utf-8',
         cwd: absoluteCwd,
-        maxBuffer: 1024 * 1024
+        maxBuffer: 1024 * 1024,
+        stdio: ['ignore', 'pipe', 'ignore']
       });
       
       return result.trim().split('\n')

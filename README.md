@@ -70,9 +70,75 @@ ChatDock comes equipped with 52+ tools organized into:
 - **Shell Commands**: Open applications, run scripts, execute system commands
 - **Web Research**: Search engines, URL fetching, content summarization
 - **Code Execution**: Run Python, JavaScript, and other scripts
-- **Planning**: Task breakdown, todo management, complexity detection
+- **Planning & Task Management**: Claude Cowork-inspired task workflow with dependencies, status tracking, and progress visibility
 - **PageIndex**: Project-wide code search and navigation
 - **Utilities**: System info, clipboard, screenshots, and more
+
+---
+
+## 📋 Task Management (Claude Cowork-Style)
+
+ChatDock uses a sophisticated task management system inspired by Claude Cowork for handling complex multi-step work:
+
+### Key Features
+
+- **Structured Task Lists**: Break down complex requests into specific, actionable items
+- **Status Tracking**: Tasks progress through states: `pending` → `in_progress` → `completed`
+- **Dependency Management**: Define task dependencies to ensure proper execution order
+- **Progress Visibility**: Real-time progress indicators and active task highlighting in the UI
+- **Workflow Enforcement**: Only ONE task can be in-progress at a time for focused execution
+
+### Workflow Pattern
+
+```
+1. Plan → Create complete task list with specific items
+2. Mark → Mark ONE task as 'in_progress' before starting work
+3. Execute → Complete the work for that specific task
+4. Complete → Mark it 'completed' IMMEDIATELY after finishing
+5. Repeat → Move to next task and repeat steps 2-4
+```
+
+### Example Usage
+
+```javascript
+// 1. Create a task plan
+task_write({
+  title: "Implement Login Feature",
+  tasks: [
+    { id: "task_1", task: "Create login form UI", status: "pending" },
+    {
+      id: "task_2",
+      task: "Add authentication API",
+      status: "pending",
+      dependsOn: ["task_1"],
+    },
+    {
+      id: "task_3",
+      task: "Write unit tests",
+      status: "pending",
+      dependsOn: ["task_2"],
+    },
+  ],
+});
+
+// 2. Mark first task as in-progress
+task_update({ taskId: "task_1", status: "in_progress" });
+
+// 3. [Work happens...]
+
+// 4. Mark completed immediately
+task_update({ taskId: "task_1", status: "completed" });
+
+// 5. Move to next task
+task_update({ taskId: "task_2", status: "in_progress" });
+```
+
+### UI Features
+
+- **Progress Bar**: Visual indicator showing completed vs total tasks
+- **Active Task Highlighting**: Currently in-progress task is prominently highlighted with a pulsing glow
+- **Inline Editing**: Click task titles or status pills to edit directly
+- **Real-time Updates**: Task changes stream in real-time without page refresh
 
 ---
 
@@ -90,11 +156,7 @@ ChatDock comes equipped with 52+ tools organized into:
 git clone https://github.com/abhaymundhara/ChatDock.git
 cd ChatDock
 
-# Using npm
 npm install
-
-# Using bun
-bun install
 ```
 
 ---
@@ -102,11 +164,7 @@ bun install
 ## 🧪 Development
 
 ```bash
-# Using npm
 npm run dev
-
-# Using bun
-bun run dev
 ```
 
 ---

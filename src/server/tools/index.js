@@ -10,6 +10,7 @@ const shell = require('./shell');
 const git = require('./git');
 const planning = require('./planning');
 const utility = require('./utility');
+const memory = require('./memory');
 const filesApi = require('./files-api');
 const pageindex = require('./pageindex');
 const codeExecution = require('./code-execution');
@@ -23,9 +24,9 @@ module.exports = {
   ...git,
   ...planning,
   ...utility,
+  ...memory,
   ...filesApi,
   ...pageindex,
   ...codeExecution,
   ...toolSearch
 };
-

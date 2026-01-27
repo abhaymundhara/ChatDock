@@ -1,10 +1,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const DEFAULTS = {
   hotkey: 'CommandOrControl+Shift+Space',
   systemPrompt: '',
-  temperature: 0.7
+  temperature: 0.7,
+  apiKey: ''
 };
 
 function mergeSettings(partial) {
@@ -30,4 +32,12 @@ function saveSettings(userDataPath, settings) {
   return merged;
 }
 
-module.exports = { DEFAULTS, mergeSettings, loadSettings, saveSettings, getSettingsPath };
+function ensureApiKey(userDataPath) {
+  const existing = loadSettings(userDataPath);
+  if (existing.apiKey) return existing.apiKey;
+  const apiKey = crypto.randomBytes(32).toString('hex');
+  saveSettings(userDataPath, { ...existing, apiKey });
+  return apiKey;
+}
+
+module.exports = { DEFAULTS, mergeSettings, loadSettings, saveSettings, getSettingsPath, ensureApiKey };

@@ -5,16 +5,16 @@ const cors = require("cors");
 const fs = require("node:fs");
 const path = require("node:path");
 const { execSync } = require("node:child_process");
-const { findAvailablePort } = require("../shared/port-allocator");
-const { chooseModel } = require("../renderer/components/model-selection");
+const { chooseModel } = require("../shared/choose-model");
+const { getServerConfig } = require("./utils/server-config");
 const { loadSettings } = require("./utils/settings-store");
 
-const PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
+const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH } =
+  getServerConfig();
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 
 // Persist the last user-chosen model between runs
-const LAST_MODEL_PATH = path.join(__dirname, "../../config/last_model.txt");
 function loadLastModel() {
   try {
     const v = fs.readFileSync(LAST_MODEL_PATH, "utf-8").trim();
@@ -196,56 +196,26 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-(async () => {
-  const port = await findAvailablePort(PORT);
-  if (port !== PORT) {
-    process.env.CHAT_SERVER_PORT = String(port);
-  }
+(() => {
   // No auto-default model: we persist last user choice and use it when a request omits `model`.
   const server = http.createServer(app);
 
-  // Try to listen on the chosen port; if it's in use, increment and retry.
-  let attemptPort = port;
-  const maxAttempts = 50;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      await new Promise((resolve, reject) => {
-        const onError = (err) => {
-          server.removeListener("listening", onListen);
-          reject(err);
-        };
-        const onListen = () => {
-          server.removeListener("error", onError);
-          resolve();
-        };
-        server.once("error", onError);
-        server.once("listening", onListen);
-        server.listen(attemptPort);
-      });
-      // success
-      process.env.CHAT_SERVER_PORT = String(attemptPort);
-      console.log(`[server] listening on http://127.0.0.1:${attemptPort}`);
-      const last = loadLastModel();
-      if (last) {
-        console.log(`[server] last chosen model: ${last}`);
-      } else {
-        console.log(
-          "[server] no last model chosen; requests must include a `model` field",
-        );
-      }
-      break;
-    } catch (err) {
-      if (err && err.code === "EADDRINUSE") {
-        console.warn(
-          `[server] port ${attemptPort} in use, trying ${attemptPort + 1}`,
-        );
-        attemptPort += 1;
-        // continue loop to retry on next port
-      } else {
-        console.error("[server] failed to start server:", err);
-        process.exit(1);
-      }
+  server.on("error", (err) => {
+    console.error("[server] failed to start server:", err);
+    process.exit(1);
+  });
+
+  server.listen(PORT, HOST, () => {
+    process.env.CHAT_SERVER_PORT = String(PORT);
+    process.env.CHAT_SERVER_HOST = HOST;
+    console.log(`[server] listening on http://${HOST}:${PORT}`);
+    const last = loadLastModel();
+    if (last) {
+      console.log(`[server] last chosen model: ${last}`);
+    } else {
+      console.log(
+        "[server] no last model chosen; requests must include a `model` field",
+      );
     }
-  }
+  });
 })();

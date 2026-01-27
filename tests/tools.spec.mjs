@@ -4,11 +4,16 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
-import { grep_search, web_search, fetch_url } from '../src/server/tools/search.js';
+import searchTools from '../src/server/tools/search.js';
+const { grep_search, web_search, fetch_url } = searchTools;
 import { run_command, get_system_info, get_current_time } from '../src/server/tools/shell.js';
 import { git_status, git_log, git_branch } from '../src/server/tools/git.js';
 import { clipboard_read, calculate, sleep } from '../src/server/tools/utility.js';
+import { ToolRegistry } from '../src/server/orchestrator/index.js';
 
 describe('Search Tools', () => {
   describe('grep_search', () => {
@@ -20,6 +25,46 @@ describe('Search Tools', () => {
       });
       assert.ok(result.results);
       assert.ok(Array.isArray(result.results));
+    });
+
+    it('should not execute shell expansions in pattern', async () => {
+      const marker = path.join(os.tmpdir(), `chatdock-grep-${Date.now()}`);
+      const pattern = `$(touch ${marker})`;
+      try {
+        if (fs.existsSync(marker)) fs.unlinkSync(marker);
+        await grep_search.run({
+          pattern,
+          path: '.',
+          maxResults: 1
+        });
+        assert.ok(!fs.existsSync(marker));
+      } finally {
+        if (fs.existsSync(marker)) fs.unlinkSync(marker);
+      }
+    });
+  });
+
+  describe('tool_finder', () => {
+    it('should be exposed via registry and core tools', async () => {
+      const registry = new ToolRegistry();
+      await registry.discover();
+      const defs = registry.getDefinitions().map(def => def.name);
+      assert.ok(defs.includes('tool_finder'));
+      assert.ok(!defs.includes('tool_search'));
+
+      const core = registry.getCoreToolsFormat().map(tool => tool.function.name);
+      assert.ok(core.includes('tool_finder'));
+      assert.ok(!core.includes('tool_search'));
+    });
+  });
+
+  describe('memory tools', () => {
+    it('should be exposed via registry', async () => {
+      const registry = new ToolRegistry();
+      await registry.discover();
+      const defs = registry.getDefinitions().map(def => def.name);
+      assert.ok(defs.includes('memory_save'));
+      assert.ok(defs.includes('memory_search'));
     });
   });
 
