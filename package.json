@@ -9,7 +9,12 @@
     "server": "node src/server/server.js",
     "dev": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/*.spec.mjs"
+    "test": "node --test tests/server-tool-filtering.spec.mjs tests/filesystem-tools.spec.mjs tests/llm-cache.spec.mjs tests/server-integration.spec.mjs",
+    "test:all": "node --test tests/*.spec.mjs",
+    "test:core": "node --test tests/server-tool-filtering.spec.mjs tests/filesystem-tools.spec.mjs tests/llm-cache.spec.mjs",
+    "test:integration": "node --test tests/server-integration.spec.mjs",
+    "test:watch": "nodemon --watch src --watch tests --ext js,mjs --exec npm test",
+    "lint": "node -c src/server/server.js && node -c src/server/tools/registry.js && node -c src/server/tools/embeddings.js && node -c src/server/utils/llm-cache.js"
   },
   "devDependencies": {
     "electron": "^40.0.0",

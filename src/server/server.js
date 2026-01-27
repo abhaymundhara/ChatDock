@@ -7,6 +7,12 @@ const path = require("node:path");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { loadSettings } = require("./utils/settings-store");
+const {
+  tools,
+  toolExecutors,
+  initializeToolEmbeddings,
+  filterToolsForMessage,
+} = require("./tools/registry");
 
 const {
   port: PORT,
@@ -102,6 +108,12 @@ function loadBrainContext() {
 
 const BRAIN_CONTEXT = loadBrainContext();
 console.log("[server] Loaded brain context (SOUL.md)");
+console.log(`[server] Loaded ${tools.length} tools`);
+
+// Initialize tool embeddings at startup
+(async () => {
+  await initializeToolEmbeddings();
+})();
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -171,6 +183,16 @@ app.post("/models/selected", (req, res) => {
   }
   saveLastModel(model);
   return res.json({ ok: true, model });
+});
+
+/* Tools endpoint */
+app.get("/tools", (_req, res) => {
+  res.json({
+    tools: tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+    })),
+  });
 });
 
 /* Chat (streaming) */
@@ -246,72 +268,113 @@ app.post("/chat", async (req, res) => {
       history.splice(0, history.length - 20);
     }
 
-    const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
-      body: JSON.stringify({
-        model: chosenModel,
-        stream: true,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...history, // Multi-turn conversation history
-        ],
-        options: { temperature },
-      }),
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
+    // Tool calling loop - keep calling until we get a final response
+    let finalResponse = "";
+    let toolCallCount = 0;
+    const maxToolCalls = 10; // Prevent infinite loops
 
-    if (!upstream.ok || !upstream.body) {
-      res
-        .status(502)
-        .end(`Upstream error: ${upstream.status} ${upstream.statusText}`);
-      return;
+    // Server-side tool filtering for efficiency
+    // Support both formats: { message: "..." } from Electron and { messages: [...] } from API
+    const userMessage =
+      userMsg ||
+      req.body.messages?.[req.body.messages.length - 1]?.content ||
+      "";
+    const startTime = Date.now();
+    const availableTools = filterToolsForMessage(userMessage);
+    console.log(`[server] Tool filtering took ${Date.now() - startTime}ms`);
+
+    while (toolCallCount < maxToolCalls) {
+      const llmStartTime = Date.now();
+      const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
+        body: JSON.stringify({
+          model: chosenModel,
+          stream: false, // Use non-streaming for tool calling
+          messages: [{ role: "system", content: systemPrompt }, ...history],
+          tools: availableTools, // Filtered tools based on user message
+          options: { temperature },
+        }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!upstream.ok) {
+        res
+          .status(502)
+          .end(`Upstream error: ${upstream.status} ${upstream.statusText}`);
+        return;
+      }
+
+      const data = await upstream.json();
+      const message = data?.message;
+      console.log(`[server] LLM inference took ${Date.now() - llmStartTime}ms`);
+
+      if (!message) {
+        res.status(502).end("Invalid response from Ollama");
+        return;
+      }
+
+      // Check if model wants to use tools
+      if (message.tool_calls && message.tool_calls.length > 0) {
+        toolCallCount++;
+        console.log(
+          `[server] Processing ${message.tool_calls.length} tool call(s)`,
+        );
+
+        // Add assistant's tool call to history
+        history.push({
+          role: "assistant",
+          content: message.content || "",
+          tool_calls: message.tool_calls,
+        });
+
+        // Execute each tool
+        for (const toolCall of message.tool_calls) {
+          const toolName = toolCall.function?.name;
+          const toolArgs = toolCall.function?.arguments || {};
+
+          const toolStartTime = Date.now();
+          console.log(`[server] Executing tool: ${toolName}`, toolArgs);
+
+          let result;
+          if (toolExecutors[toolName]) {
+            try {
+              result = await toolExecutors[toolName](toolArgs);
+              console.log(
+                `[server] Tool ${toolName} executed in ${Date.now() - toolStartTime}ms`,
+              );
+            } catch (error) {
+              result = { success: false, error: error.message };
+            }
+          } else {
+            result = { success: false, error: `Unknown tool: ${toolName}` };
+          }
+
+          // Add tool result to history
+          history.push({
+            role: "tool",
+            content: JSON.stringify(result),
+            tool_name: toolName,
+          });
+        }
+
+        // Continue loop to get final response
+        continue;
+      }
+
+      // No tool calls - we have the final response
+      finalResponse = message.content || "";
+      history.push({ role: "assistant", content: finalResponse });
+      break;
     }
 
+    // Send response to client
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
-
-    const reader = upstream.body.getReader();
-    const decoder = new TextDecoder();
-    let leftover = "";
-    let assistantResponse = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const combined = leftover + chunk;
-      const lines = combined.split(/\r?\n/);
-      leftover = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const evt = JSON.parse(line);
-          if (evt?.message?.content) {
-            res.write(evt.message.content);
-            assistantResponse += evt.message.content;
-          }
-        } catch {}
-      }
-    }
-
-    if (leftover.trim()) {
-      try {
-        const evt = JSON.parse(leftover);
-        if (evt?.message?.content) {
-          res.write(evt.message.content);
-          assistantResponse += evt.message.content;
-        }
-      } catch {}
-    }
-
-    // Add assistant response to history
-    history.push({ role: "assistant", content: assistantResponse });
+    res.write(finalResponse);
+    res.end();
 
     // Save to daily log
-    appendToTodayLog(userMsg, assistantResponse);
-
-    res.end();
+    appendToTodayLog(userMsg, finalResponse);
   } catch (err) {
     res.status(500).end("Server error: " + (err?.message || String(err)));
   }
