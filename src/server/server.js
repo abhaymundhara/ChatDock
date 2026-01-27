@@ -3,6 +3,7 @@ const http = require("node:http");
 const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs");
+const path = require("node:path");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { loadSettings } = require("./utils/settings-store");
@@ -15,6 +16,36 @@ const {
 } = getServerConfig();
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
+
+// Load brain files as context (moltbot-style)
+function loadBrainContext() {
+  try {
+    const appPath =
+      process.env.CHATDOCK_APP_PATH || path.join(__dirname, "../..");
+    const brainPath = path.join(appPath, "brain");
+
+    const files = ["SOUL.md"];
+    const context = [];
+
+    for (const file of files) {
+      const filePath = path.join(brainPath, file);
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, "utf-8");
+        context.push(`# ${file}\n\n${content}`);
+      }
+    }
+
+    return context.join("\n\n---\n\n");
+  } catch (e) {
+    console.warn("[server] Could not load brain context:", e.message);
+    return "You are ChatDock, a helpful AI assistant.";
+  }
+}
+
+const BRAIN_CONTEXT = loadBrainContext();
+console.log(
+  "[server] Loaded brain context (SOUL.md)",
+);
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -35,8 +66,6 @@ function saveLastModel(name) {
     );
   }
 }
-
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant.";
 
 const app = express();
 app.use(cors());
@@ -132,7 +161,11 @@ app.post("/chat", async (req, res) => {
     }
 
     const settings = loadSettings(process.env.USER_DATA_PATH || __dirname);
-    const systemPrompt = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+    // Use brain context (SOUL.md, AGENTS.md, TOOLS.md, USER.md) as base
+    // Settings can append additional instructions
+    const systemPrompt = settings.systemPrompt
+      ? `${BRAIN_CONTEXT}\n\n## Additional Instructions\n${settings.systemPrompt}`
+      : BRAIN_CONTEXT;
     const temperature =
       typeof settings.temperature === "number" ? settings.temperature : 0.7;
 
