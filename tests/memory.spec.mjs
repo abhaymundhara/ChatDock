@@ -99,6 +99,59 @@ describe('MemoryManager', () => {
     });
   });
 
+  describe('clawdbot context', () => {
+    function dateString(date) {
+      return date.toISOString().split('T')[0];
+    }
+
+    it('should use workspace Memory directory when appPath is provided', () => {
+      const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'chatdock-app-'));
+      const appManager = new MemoryManager({ appPath });
+      assert.strictEqual(
+        appManager.memoryDir,
+        path.join(appPath, 'Memory'),
+        'memoryDir should be based on appPath',
+      );
+      if (appManager.close) {
+        appManager.close();
+      }
+      fs.rmSync(appPath, { recursive: true, force: true });
+    });
+
+    it('should include MEMORY.md and daily logs in Clawdbot context', () => {
+      const appPath = fs.mkdtempSync(path.join(os.tmpdir(), 'chatdock-app-'));
+      const memoryDir = path.join(appPath, 'Memory');
+      const dailyDir = path.join(memoryDir, 'daily');
+      fs.mkdirSync(dailyDir, { recursive: true });
+
+      fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), 'LONG_TERM', 'utf-8');
+
+      const today = new Date();
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      fs.writeFileSync(
+        path.join(dailyDir, `${dateString(today)}.md`),
+        'TODAY_LOG',
+        'utf-8',
+      );
+      fs.writeFileSync(
+        path.join(dailyDir, `${dateString(yesterday)}.md`),
+        'YESTERDAY_LOG',
+        'utf-8',
+      );
+
+      const appManager = new MemoryManager({ appPath });
+      const context = appManager.getClawdbotContext();
+      assert.ok(context.includes('LONG_TERM'), 'Should include MEMORY.md content');
+      assert.ok(context.includes('TODAY_LOG'), 'Should include today log');
+      assert.ok(context.includes('YESTERDAY_LOG'), 'Should include yesterday log');
+
+      if (appManager.close) {
+        appManager.close();
+      }
+      fs.rmSync(appPath, { recursive: true, force: true });
+    });
+  });
+
   describe('search()', () => {
     before(() => {
       // Add some searchable content

@@ -3,12 +3,13 @@
  * Agent-accessible tools for persistent memory management (Clawdbot-style)
  */
 
-const path = require('node:path');
-const os = require('node:os');
-
 // The MemoryManager instance will be injected via context
 // For now, we create a singleton that can be set externally
 let memoryManagerInstance = null;
+
+function getAppPath() {
+  return process.env.CHATDOCK_APP_PATH || process.cwd();
+}
 
 /**
  * Set the memory manager instance (called by orchestrator)
@@ -24,13 +25,13 @@ function getMemoryManager() {
   if (memoryManagerInstance) {
     return memoryManagerInstance;
   }
-  
+
   // Lazy initialization fallback
   const { MemoryManager } = require('../utils/memory-manager');
-  memoryManagerInstance = new MemoryManager({
-    dataDir: path.join(os.homedir(), 'ChatDock/Memory')
-  });
-  memoryManagerInstance.initialize().catch(console.error);
+  memoryManagerInstance = new MemoryManager({ appPath: getAppPath() });
+  if (!memoryManagerInstance.initialized) {
+    memoryManagerInstance.initialize();
+  }
   return memoryManagerInstance;
 }
 
@@ -64,19 +65,19 @@ const memory_save = {
 
   run: async ({ content, tags = [], permanent = false }) => {
     const manager = getMemoryManager();
-    
+
     if (!manager.initialized) {
       await manager.initialize();
     }
 
     const result = await manager.save(content, { tags, permanent });
-    
+
     return {
       success: true,
       id: result.id,
       permanent: result.permanent,
       source: result.source,
-      message: permanent 
+      message: permanent
         ? 'Saved to long-term memory (will persist indefinitely)'
         : 'Saved to daily log (will be searchable)'
     };
@@ -108,13 +109,13 @@ const memory_search = {
 
   run: async ({ query, limit = 10 }) => {
     const manager = getMemoryManager();
-    
+
     if (!manager.initialized) {
       await manager.initialize();
     }
 
     const results = await manager.search(query, limit);
-    
+
     if (results.length === 0) {
       return {
         query,
@@ -163,13 +164,13 @@ const memory_get = {
 
   run: async ({ id }) => {
     const manager = getMemoryManager();
-    
+
     if (!manager.initialized) {
       await manager.initialize();
     }
 
     const memory = await manager.get(id);
-    
+
     if (!memory) {
       return {
         found: false,
@@ -212,7 +213,7 @@ const memory_context = {
 
   run: async ({ days = 7 }) => {
     const manager = getMemoryManager();
-    
+
     if (!manager.initialized) {
       await manager.initialize();
     }
@@ -242,7 +243,7 @@ const memory_stats = {
 
   run: async () => {
     const manager = getMemoryManager();
-    
+
     if (!manager.initialized) {
       await manager.initialize();
     }

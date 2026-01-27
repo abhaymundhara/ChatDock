@@ -206,6 +206,15 @@ describe("Orchestrator", () => {
     orch.clearHistory();
     assert.strictEqual(orch.getHistory().length, 0);
   });
+
+  it("injects Clawdbot memory into prompt", () => {
+    const mockMemory = {
+      getCombinedMemory: () => "## Clawdbot Memory\nTEST_BLOCK",
+    };
+    const orch = new Orchestrator({ memoryManager: mockMemory });
+    const prompt = orch.buildAgenticPrompt({});
+    assert.ok(prompt.includes("TEST_BLOCK"));
+  });
 });
 
 describe("Workflow Enforcement", () => {

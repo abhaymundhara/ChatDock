@@ -6,7 +6,6 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const os = require("node:os");
 const crypto = require("node:crypto");
 
 // For SQLite with FTS5 - using better-sqlite3 (sync, simpler)
@@ -20,9 +19,9 @@ try {
 
 class MemoryManager {
   constructor(options = {}) {
-    // Memory directory: ~/ChatDock/Memory/
-    this.memoryDir =
-      options.memoryDir || path.join(os.homedir(), "ChatDock", "Memory");
+    this.appPath =
+      options.appPath || process.env.CHATDOCK_APP_PATH || process.cwd();
+    this.memoryDir = options.memoryDir || path.join(this.appPath, "Memory");
     this.userMemoryFile = path.join(this.memoryDir, "user.md");
     this.systemMemoryFile = path.join(this.memoryDir, "chatdock.md");
     
@@ -281,8 +280,36 @@ The agent saves critical information here that should persist indefinitely.
    * Get today's daily log file path
    */
   _getTodayLogPath() {
-    const today = new Date().toISOString().split("T")[0];
-    return path.join(this.dailyDir, `${today}.md`);
+    return this._getDailyLogPath(new Date());
+  }
+
+  _getDailyLogPath(date) {
+    const dateString = date.toISOString().split("T")[0];
+    return path.join(this.dailyDir, `${dateString}.md`);
+  }
+
+  _ensureFile(filePath, content) {
+    if (!fs.existsSync(filePath)) {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, content, "utf-8");
+    }
+  }
+
+  _ensureDailyLog(date) {
+    const filePath = this._getDailyLogPath(date);
+    if (!fs.existsSync(filePath)) {
+      const label = date.toLocaleDateString("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      this._ensureFile(filePath, `# Daily Log - ${label}\n`);
+    }
+    return filePath;
   }
 
   /**
@@ -330,21 +357,33 @@ The agent saves critical information here that should persist indefinitely.
    * @returns {string}
    */
   getCombinedMemory() {
-    const user = this.getUserMemory();
-    const system = this.getSystemMemory();
-    const recent = this.getRecentContext(3); // Last 3 days
+    return this.getClawdbotContext();
+  }
 
-    return `## Persistent Memory
+  /**
+   * Clawdbot-style memory context (MEMORY.md + today/yesterday logs)
+   * @returns {string}
+   */
+  getClawdbotContext() {
+    this._ensureFile(this.longTermFile, "# Long-term Memory\n\n");
+    const longTerm = fs.readFileSync(this.longTermFile, "utf-8");
 
-### User Context
-${user}
+    const today = new Date();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const todayPath = this._ensureDailyLog(today);
+    const yesterdayPath = this._ensureDailyLog(yesterday);
 
-### System Context
-${system}
+    const todayLog = fs.readFileSync(todayPath, "utf-8");
+    const yesterdayLog = fs.readFileSync(yesterdayPath, "utf-8");
 
-### Recent Memory
-${recent}
-`;
+    return [
+      "## Clawdbot Memory",
+      "### MEMORY.md",
+      longTerm.trim(),
+      "### Daily Logs",
+      todayLog.trim(),
+      yesterdayLog.trim(),
+    ].join("\n\n");
   }
 
   /**
@@ -740,4 +779,3 @@ ${recent}
 }
 
 module.exports = { MemoryManager };
-
