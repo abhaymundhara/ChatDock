@@ -369,13 +369,6 @@ class Orchestrator {
     const msg = userMessage.toLowerCase();
     const matchesAny = (patterns) => patterns.some((p) => p.test(msg));
 
-    // Very short messages are almost always simple follow-ups
-    const wordCount = userMessage.trim().split(/\s+/).length;
-    if (wordCount <= 8) {
-      console.log(`[orchestrator] ✓ Short message (${wordCount} words) - treating as simple`);
-      return false;
-    }
-
     // Simple queries: questions, info requests, greetings, URLs, math
     const simplePatterns = [
       /^(what|who|when|where|why|how)\s/i,
@@ -385,14 +378,6 @@ class Orchestrator {
       /^(add|subtract|multiply|divide|calculate)\s/i,
       /^\d+\s*[\+\-\*\/]/i,
     ];
-
-    if (
-      matchesAny(simplePatterns) ||
-      this.extractUrls(userMessage).length > 0
-    ) {
-      console.log(`[orchestrator] ✓ Simple query - skipping tasks`);
-      return false;
-    }
 
     // Complex indicators: code work, debugging, features, analysis
     const complexPatterns = [
@@ -405,8 +390,26 @@ class Orchestrator {
       /\d+[\.\)]\s/,
     ];
 
-    const isComplex =
-      matchesAny(complexPatterns) || userMessage.split(/\s+/).length > 20;
+    const wordCount = userMessage.trim().split(/\s+/).length;
+    const isComplexByPattern = matchesAny(complexPatterns);
+
+    // Very short messages are almost always simple follow-ups unless they match complex patterns
+    if (wordCount <= 8 && !isComplexByPattern) {
+      console.log(
+        `[orchestrator] ✓ Short message (${wordCount} words) - treating as simple`,
+      );
+      return false;
+    }
+
+    if (
+      matchesAny(simplePatterns) ||
+      this.extractUrls(userMessage).length > 0
+    ) {
+      console.log(`[orchestrator] ✓ Simple query - skipping tasks`);
+      return false;
+    }
+
+    const isComplex = isComplexByPattern || wordCount > 20;
     console.log(
       `[orchestrator] ✓ ${isComplex ? "Complex task - tasks required" : "Simple task - skipping tasks"}`,
     );
