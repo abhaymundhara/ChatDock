@@ -17,6 +17,64 @@ const {
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 
+// Memory management
+const conversationHistory = new Map(); // sessionId -> messages array
+
+function getMemoryPath() {
+  const appPath =
+    process.env.CHATDOCK_APP_PATH || path.join(__dirname, "../..");
+  return path.join(appPath, "memory", "daily");
+}
+
+function getTodayLogPath() {
+  const memoryPath = getMemoryPath();
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  return path.join(memoryPath, `${today}.md`);
+}
+
+function getYesterdayLogPath() {
+  const memoryPath = getMemoryPath();
+  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+  return path.join(memoryPath, `${yesterday}.md`);
+}
+
+function loadDailyLogs() {
+  const logs = [];
+
+  // Load yesterday's log
+  const yesterdayPath = getYesterdayLogPath();
+  if (fs.existsSync(yesterdayPath)) {
+    const content = fs.readFileSync(yesterdayPath, "utf-8");
+    logs.push(`# Yesterday's Log\n\n${content}`);
+  }
+
+  // Load today's log
+  const todayPath = getTodayLogPath();
+  if (fs.existsSync(todayPath)) {
+    const content = fs.readFileSync(todayPath, "utf-8");
+    logs.push(`# Today's Log\n\n${content}`);
+  }
+
+  return logs.length > 0 ? logs.join("\n\n---\n\n") : "";
+}
+
+function appendToTodayLog(userMsg, assistantMsg) {
+  try {
+    const memoryPath = getMemoryPath();
+    if (!fs.existsSync(memoryPath)) {
+      fs.mkdirSync(memoryPath, { recursive: true });
+    }
+
+    const todayPath = getTodayLogPath();
+    const timestamp = new Date().toISOString();
+    const entry = `\n## ${timestamp}\n\n**User:** ${userMsg}\n\n**Assistant:** ${assistantMsg}\n`;
+
+    fs.appendFileSync(todayPath, entry, "utf-8");
+  } catch (e) {
+    console.warn("[server] Failed to write to daily log:", e.message);
+  }
+}
+
 // Load brain files as context (moltbot-style)
 function loadBrainContext() {
   try {
@@ -43,9 +101,7 @@ function loadBrainContext() {
 }
 
 const BRAIN_CONTEXT = loadBrainContext();
-console.log(
-  "[server] Loaded brain context (SOUL.md)",
-);
+console.log("[server] Loaded brain context (SOUL.md)");
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -122,6 +178,7 @@ app.post("/chat", async (req, res) => {
   try {
     const userMsg = String(req.body?.message ?? "");
     const requestedModel = req.body?.model ? String(req.body.model) : "";
+    const sessionId = req.body?.sessionId || "default"; // Support session IDs
     const lastModel = loadLastModel();
     let availableModels = [];
 
@@ -161,21 +218,41 @@ app.post("/chat", async (req, res) => {
     }
 
     const settings = loadSettings(process.env.USER_DATA_PATH || __dirname);
-    // Use brain context (SOUL.md, AGENTS.md, TOOLS.md, USER.md) as base
-    // Settings can append additional instructions
-    const systemPrompt = settings.systemPrompt
-      ? `${BRAIN_CONTEXT}\n\n## Additional Instructions\n${settings.systemPrompt}`
-      : BRAIN_CONTEXT;
+
+    // Build system prompt with brain context and daily logs
+    const dailyLogs = loadDailyLogs();
+    let systemPrompt = BRAIN_CONTEXT;
+    if (dailyLogs) {
+      systemPrompt += `\n\n---\n\n# Memory Context\n\n${dailyLogs}`;
+    }
+    if (settings.systemPrompt) {
+      systemPrompt += `\n\n## Additional Instructions\n${settings.systemPrompt}`;
+    }
+
     const temperature =
       typeof settings.temperature === "number" ? settings.temperature : 0.7;
+
+    // Get or create conversation history for this session
+    if (!conversationHistory.has(sessionId)) {
+      conversationHistory.set(sessionId, []);
+    }
+    const history = conversationHistory.get(sessionId);
+
+    // Add user message to history
+    history.push({ role: "user", content: userMsg });
+
+    // Keep only last 20 messages to avoid context overflow
+    if (history.length > 20) {
+      history.splice(0, history.length - 20);
+    }
 
     const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
       body: JSON.stringify({
         model: chosenModel,
         stream: true,
         messages: [
-          ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-          { role: "user", content: userMsg },
+          { role: "system", content: systemPrompt },
+          ...history, // Multi-turn conversation history
         ],
         options: { temperature },
       }),
@@ -196,6 +273,7 @@ app.post("/chat", async (req, res) => {
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let leftover = "";
+    let assistantResponse = "";
 
     while (true) {
       const { value, done } = await reader.read();
@@ -209,7 +287,10 @@ app.post("/chat", async (req, res) => {
         if (!line.trim()) continue;
         try {
           const evt = JSON.parse(line);
-          if (evt?.message?.content) res.write(evt.message.content);
+          if (evt?.message?.content) {
+            res.write(evt.message.content);
+            assistantResponse += evt.message.content;
+          }
         } catch {}
       }
     }
@@ -217,9 +298,18 @@ app.post("/chat", async (req, res) => {
     if (leftover.trim()) {
       try {
         const evt = JSON.parse(leftover);
-        if (evt?.message?.content) res.write(evt.message.content);
+        if (evt?.message?.content) {
+          res.write(evt.message.content);
+          assistantResponse += evt.message.content;
+        }
       } catch {}
     }
+
+    // Add assistant response to history
+    history.push({ role: "assistant", content: assistantResponse });
+
+    // Save to daily log
+    appendToTodayLog(userMsg, assistantResponse);
 
     res.end();
   } catch (err) {
