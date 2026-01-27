@@ -3,7 +3,11 @@ const { fork } = require("node:child_process");
 const { findAvailablePort } = require("../shared/port-allocator");
 const { buildTrayTemplate } = require("./tray/tray-menu");
 const { getSettingsHtml } = require("./settings/settings-window");
-const { loadSettings, saveSettings, ensureApiKey } = require("../server/utils/settings-store");
+const {
+  loadSettings,
+  saveSettings,
+  ensureApiKey,
+} = require("../server/utils/settings-store");
 const { validateHotkey } = require("./settings/settings-ipc");
 const { getTrayTitle } = require("./tray/tray-utils");
 
@@ -19,6 +23,17 @@ const BrowserWindow =
   electron && typeof electron === "object" ? electron.BrowserWindow : null;
 const globalShortcut =
   electron && typeof electron === "object" ? electron.globalShortcut : null;
+const ipcMain =
+  electron && typeof electron === "object" ? electron.ipcMain : null;
+
+// Handle window resizing from renderer
+if (ipcMain) {
+  ipcMain.on("resize-window", (event, width, height) => {
+    if (win && !win.isDestroyed()) {
+      win.setSize(width, height);
+    }
+  });
+}
 
 const DEFAULT_PORT = Number(process.env.CHAT_SERVER_PORT || 3001);
 const DEFAULT_MODEL = process.env.OLLAMA_MODEL || "gemma2:2b";
@@ -39,7 +54,15 @@ function getIndexHtmlPath() {
   return path.join(__dirname, "../renderer/ace-interface.html");
 }
 
-function buildServerEnv({ port, model, base, apiKey, host, userDataPath, appPath }) {
+function buildServerEnv({
+  port,
+  model,
+  base,
+  apiKey,
+  host,
+  userDataPath,
+  appPath,
+}) {
   return {
     ...process.env,
     CHAT_SERVER_PORT: String(port),
@@ -71,7 +94,15 @@ async function waitForServerReady(
   return false;
 }
 
-function startServer({ port, model, base, apiKey, host, userDataPath, appPath }) {
+function startServer({
+  port,
+  model,
+  base,
+  apiKey,
+  host,
+  userDataPath,
+  appPath,
+}) {
   const env = buildServerEnv({
     port,
     model,
@@ -86,18 +117,21 @@ function startServer({ port, model, base, apiKey, host, userDataPath, appPath })
   }
   const resolvedAppPath =
     app && typeof app.getAppPath === "function" ? app.getAppPath() : appPath;
-  
+
   // Use orchestrator server for full agentic capabilities (45+ tools)
-  const serverPath = path.join(resolvedAppPath, "src/server/server-orchestrator.js");
-  
-  console.log('[main] Starting orchestrator server with agentic tools...');
+  const serverPath = path.join(
+    resolvedAppPath,
+    "src/server/server-orchestrator.js",
+  );
+
+  console.log("[main] Starting orchestrator server with agentic tools...");
   serverProcess = fork(serverPath, [], { env, stdio: "inherit" });
-  
-  serverProcess.on('error', (err) => {
-    console.error('[main] Server process error:', err);
+
+  serverProcess.on("error", (err) => {
+    console.error("[main] Server process error:", err);
   });
-  
-  serverProcess.on('exit', (code, signal) => {
+
+  serverProcess.on("exit", (code, signal) => {
     if (code !== 0 && code !== null) {
       console.error(`[main] Server exited with code ${code}`);
     }
@@ -134,7 +168,7 @@ function createMainWindow() {
   const isLinux = process.platform === "linux";
   win = new BrowserWindow({
     width: 700,
-    height: 500,
+    height: 70, // Start small, dynamic resize will handle expansion
     frame: false,
     transparent: !isLinux,
     alwaysOnTop: true,
@@ -172,7 +206,9 @@ function createSettingsWindow() {
       contextIsolation: true,
     },
   });
-  settingsWindow.loadFile(path.join(__dirname, "../renderer/components/settings.html"));
+  settingsWindow.loadFile(
+    path.join(__dirname, "../renderer/components/settings.html"),
+  );
   settingsWindow.on("closed", () => {
     settingsWindow = null;
   });
@@ -185,7 +221,7 @@ function createTray({ serverUrl }) {
   <circle cx="8" cy="8" r="3" fill="#60a5fa" />
 </svg>`;
   const icon = electron.nativeImage.createFromDataURL(
-    `data:image/svg+xml;base64,${Buffer.from(iconSvg).toString('base64')}`
+    `data:image/svg+xml;base64,${Buffer.from(iconSvg).toString("base64")}`,
   );
   if (icon && typeof icon.setTemplateImage === "function") {
     icon.setTemplateImage(true);
@@ -196,32 +232,34 @@ function createTray({ serverUrl }) {
   if (trayTitle) tray.setTitle(trayTitle);
 
   const template = buildTrayTemplate({ serverUrl });
-  const menu = electron.Menu.buildFromTemplate(template.map((item) => {
-    if (item.id === "ask-ai") {
-      return {
-        ...item,
-        click: () => {
-          if (win) {
-            win.show();
-            win.focus();
-          }
-        },
-      };
-    }
-    if (item.id === "settings") {
-      return {
-        ...item,
-        click: () => createSettingsWindow(),
-      };
-    }
-    if (item.id === "quit") {
-      return {
-        ...item,
-        click: () => app.quit(),
-      };
-    }
-    return item;
-  }));
+  const menu = electron.Menu.buildFromTemplate(
+    template.map((item) => {
+      if (item.id === "ask-ai") {
+        return {
+          ...item,
+          click: () => {
+            if (win) {
+              win.show();
+              win.focus();
+            }
+          },
+        };
+      }
+      if (item.id === "settings") {
+        return {
+          ...item,
+          click: () => createSettingsWindow(),
+        };
+      }
+      if (item.id === "quit") {
+        return {
+          ...item,
+          click: () => app.quit(),
+        };
+      }
+      return item;
+    }),
+  );
 
   tray.setContextMenu(menu);
   tray.on("click", () => tray.popUpContextMenu(menu));
@@ -349,10 +387,11 @@ if (app && typeof app.whenReady === "function") {
     return true;
   });
   electron.ipcMain.handle("settings:minimize", () => {
-    if (settingsWindow && !settingsWindow.isDestroyed()) settingsWindow.minimize();
+    if (settingsWindow && !settingsWindow.isDestroyed())
+      settingsWindow.minimize();
     return true;
   });
-  
+
   // Handle open-settings event from renderer
   electron.ipcMain.on("open-settings", () => {
     if (win && win.isVisible()) {

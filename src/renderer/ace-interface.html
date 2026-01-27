@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ChatDock - ACE</title>
+    <title>ChatDock</title>
     <link rel="stylesheet" href="styles/ace-ui.css" />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap"
@@ -11,7 +11,7 @@
     />
   </head>
   <body>
-    <div class="drag-handle"></div>
+    <!-- Drag handle removed in favor of whole-bar dragging via CSS -->
 
     <div class="ace-bar" id="aceBar">
       <!-- Input Row (Always Visible) -->
@@ -881,6 +881,18 @@
           window.settingsAPI.open();
         }
       });
+
+      // ===== Window Resizing =====
+      const resizeObserver = new ResizeObserver((entries) => {
+        for (let entry of entries) {
+          const height = Math.ceil(entry.contentRect.height);
+          // Add buffer for shadows/padding (approx 20px)
+          if (window.windowAPI && window.windowAPI.resize) {
+            window.windowAPI.resize(700, height + 20);
+          }
+        }
+      });
+      resizeObserver.observe(aceBar);
     </script>
   </body>
 </html>

@@ -121,14 +121,17 @@ class Orchestrator {
 
     // Initialize with provided conversation history for context continuity
     if (context.conversationHistory && context.conversationHistory.length > 0) {
-      // Prepend provided history to maintain context across requests
-      this.conversationHistory = [...context.conversationHistory];
+      // Filter out any duplicate of the current message (client may have already added it)
+      const filteredHistory = context.conversationHistory.filter(
+        (msg) => !(msg.role === "user" && msg.content === userMessage),
+      );
+      this.conversationHistory = [...filteredHistory];
       console.log(
-        `[orchestrator] 📚 Loaded ${context.conversationHistory.length} messages from history`,
+        `[orchestrator] 📚 Loaded ${filteredHistory.length} messages from history`,
       );
     }
 
-    // Add user message to history
+    // Add user message to history (only once)
     this.conversationHistory.push({
       role: "user",
       content: userMessage,
