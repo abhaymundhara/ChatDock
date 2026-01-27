@@ -109,6 +109,7 @@
       let selectedCommandIndex = 0;
       let currentTasks = [];
       let currentDependencies = {};
+      let conversationHistory = []; // Track conversation for context
       const WORKFLOW_STEPS = [
         { key: "tasks", label: "Tasks" },
         { key: "tool_finder", label: "ToolFinder" },
@@ -640,6 +641,9 @@
 
         if (command === "clear") {
           messagesList.innerHTML = "";
+          conversationHistory = []; // Clear conversation history
+          currentTasks = []; // Clear tasks
+          renderTasks();
           expand(false);
           return true;
         }
@@ -672,7 +676,8 @@
 
         setThinking(true);
         resetWorkflow();
-        messagesList.innerHTML = "";
+        // Don't clear messages - keep conversation visible
+        // messagesList.innerHTML = "";
         if (!hasTasks()) {
           expand(false);
         } else {
@@ -680,18 +685,26 @@
         }
         hideCommandPalette();
 
+        // Add user message to UI and history
+        addMessage(text, "user");
+        conversationHistory.push({ role: "user", content: text });
+
         chatInput.value = "";
-        chatInput.placeholder = text;
+        chatInput.placeholder = "";
 
         try {
-          // Use the agentic endpoint with tool calling
+          // Use the agentic endpoint with tool calling AND conversation history
           const response = await fetch(`${CHAT_BASE}/chat/agent`, {
             method: "POST",
             headers: {
               ...getAuthHeaders(),
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ message: text, model: currentModel }),
+            body: JSON.stringify({
+              message: text,
+              model: currentModel,
+              history: conversationHistory.slice(-20), // Send last 20 messages for context
+            }),
           });
 
           if (!response.ok) {

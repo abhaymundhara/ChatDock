@@ -123,7 +123,9 @@ class Orchestrator {
     if (context.conversationHistory && context.conversationHistory.length > 0) {
       // Prepend provided history to maintain context across requests
       this.conversationHistory = [...context.conversationHistory];
-      console.log(`[orchestrator] 📚 Loaded ${context.conversationHistory.length} messages from history`);
+      console.log(
+        `[orchestrator] 📚 Loaded ${context.conversationHistory.length} messages from history`,
+      );
     }
 
     // Add user message to history
@@ -471,14 +473,41 @@ REQUIRED ACTION: Call task_write({ tasks: [...] }) only. Do not use other tools 
       return null;
     }
 
-    // BOTH SIMPLE & COMPLEX: Always enforce tool_finder before other tools
+    // BOTH SIMPLE & COMPLEX: Enforce tool_finder ONLY for unknown/rare tools
+    // Common tools (run_command, file_read, file_write, etc.) don't need discovery
     if (!hasToolFinder && hasNonPlanning) {
-      if (!hasToolFinderCall) {
-        // Suggest a better query based on attempted tool
-        const attemptedTool = toolNames.find(
-          (name) => !planningTools.has(name) && name !== "tool_finder",
-        );
+      const commonTools = new Set([
+        "run_command",
+        "run_script",
+        "open_app",
+        "file_read",
+        "file_write",
+        "file_info",
+        "list_directory",
+        "find_file",
+        "edit_file",
+        "append_file",
+        "create_directory",
+        "rename_file",
+        "delete_file",
+        "web_search",
+        "fetch_url",
+        "git_status",
+        "git_log",
+        "git_branch",
+        "calculate",
+        "get_system_info",
+        "get_current_time",
+      ]);
 
+      const attemptedTool = toolNames.find(
+        (name) => !planningTools.has(name) && name !== "tool_finder",
+      );
+
+      // Only require tool_finder if the tool is NOT in the common set
+      const isUncommonTool = attemptedTool && !commonTools.has(attemptedTool);
+
+      if (isUncommonTool && !hasToolFinderCall) {
         // Smart query suggestions based on tool category
         const querySuggestions = [
           { keywords: ["search", "web"], query: "search web news" },
@@ -494,16 +523,49 @@ REQUIRED ACTION: Call task_write({ tasks: [...] }) only. Do not use other tools 
 
         return {
           type: "tool_finder_required",
-          message: `STOP: You must call tool_finder before using "${attemptedTool || "tools"}".
+          message: `STOP: You must call tool_finder before using "${attemptedTool}".
 
-REQUIRED ACTION: Call tool_finder({ query: "${suggestedQuery}" }) first to discover the right tool.
+REQUIRED ACTION: Call tool_finder({ query: "${suggestedQuery}" }) first to discover this tool.
 
 The user asked: "${userMessage.substring(0, 100)}..."
-Find the appropriate tool for this request.`,
+Common tools (run_command, file_read, web_search, etc.) don't need discovery.`,
         };
       }
 
-      if (hasToolFinderCall) {
+      // If tool_finder is bundled with execution, that's okay for common tools
+      // Only enforce separation for uncommon tools
+      const hasUncommonTool = toolNames.some((name) => {
+        const commonTools = new Set([
+          "run_command",
+          "run_script",
+          "open_app",
+          "file_read",
+          "file_write",
+          "file_info",
+          "list_directory",
+          "find_file",
+          "edit_file",
+          "append_file",
+          "create_directory",
+          "rename_file",
+          "delete_file",
+          "web_search",
+          "fetch_url",
+          "git_status",
+          "git_log",
+          "git_branch",
+          "calculate",
+          "get_system_info",
+          "get_current_time",
+        ]);
+        return (
+          !planningTools.has(name) &&
+          name !== "tool_finder" &&
+          !commonTools.has(name)
+        );
+      });
+
+      if (hasToolFinderCall && hasUncommonTool) {
         return {
           type: "tool_finder_only",
           message: `STOP: Tool discovery must happen before any execution.
