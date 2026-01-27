@@ -43,6 +43,8 @@ AGENTIC_LOOP_MIGRATION.md
 
 # Bun
 .bun/
-Memory/user.md
-Memory/chatdock.md
+
+# User-specific memory (auto-created on first run)
+Memory/
+
 docs/PLANNING_ENFORCEMENT.md

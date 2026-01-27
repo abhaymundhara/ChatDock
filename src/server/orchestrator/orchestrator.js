@@ -119,6 +119,15 @@ class Orchestrator {
     this.toolRetries.clear();
     this.currentPhase = AgenticPhase.ANALYZE;
 
+    // Initialize with provided conversation history for context continuity
+    if (context.conversationHistory && context.conversationHistory.length > 0) {
+      // Prepend provided history to maintain context across requests
+      this.conversationHistory = [...context.conversationHistory];
+      console.log(
+        `[orchestrator] 📚 Loaded ${context.conversationHistory.length} messages from history`,
+      );
+    }
+
     // Add user message to history
     this.conversationHistory.push({
       role: "user",
@@ -236,9 +245,9 @@ class Orchestrator {
     // Parse user intent, load relevant skills, identify required tools
     yield* this.analyzePhase(userMessage, context);
 
-    // Detect if task requires planning
-    const requiresPlanning = this.detectComplexTask(userMessage);
-    let hasPlan = false;
+    // Workflow enforcement state
+    let hasTaskPlan = false;
+    let hasToolFinder = false;
 
     // Main agentic loop
     while (this.loopIteration < this.maxIterations) {
@@ -253,51 +262,46 @@ class Orchestrator {
 
         // Check if response has tool calls
         if (response.tool_calls && response.tool_calls.length > 0) {
-          // ENFORCE PLANNING: First iteration must create a plan for complex tasks
-          if (this.loopIteration === 1 && requiresPlanning && !hasPlan) {
+          const violation = this.getWorkflowViolation(
+            response.tool_calls,
+            { hasTaskPlan, hasToolFinder },
+            userMessage, // Pass userMessage to check complexity
+          );
+
+          if (violation) {
             const firstTool = response.tool_calls[0].function.name;
-            const planningTools = ["task_write", "think", "ask_user"];
+            console.log(
+              `[orchestrator] 🛑 WORKFLOW VIOLATION: ${violation.type} (from ${firstTool})`,
+            );
 
-            if (!planningTools.includes(firstTool)) {
-              console.log(
-                `[orchestrator] 🛑 ENFORCING PLANNING: Task requires planning, redirecting from ${firstTool}`,
-              );
+            this.conversationHistory.push({
+              role: "assistant",
+              content: "",
+              tool_calls: response.tool_calls,
+            });
+            this.conversationHistory.push({
+              role: "tool",
+              content: violation.message,
+              tool_call_id: response.tool_calls[0].id || firstTool,
+            });
 
-              // Inject planning instruction
-              this.conversationHistory.push({
-                role: "assistant",
-                content: "",
-                tool_calls: response.tool_calls,
-              });
-              this.conversationHistory.push({
-                role: "tool",
-                content: `STOP: This task requires planning before execution.
-
-The user asked: "${userMessage}"
-
-You attempted to directly execute: ${firstTool}
-
-REQUIRED ACTION: Use one of these planning tools first:
-1. task_write({ tasks: [...] }) - Create a structured task list
-2. think({ problem: "...", depth: "balanced" }) - Think through the approach
-
-After planning, you can proceed with execution.`,
-                tool_call_id: response.tool_calls[0].id || firstTool,
-              });
-
-              continue; // Force re-planning
-            }
+            continue; // Force model to comply with workflow
           }
 
-          // Track if a plan was created
-          const isPlanningCall = response.tool_calls.some((tc) =>
-            ["task_write", "think"].includes(tc.function.name),
+          const createdTasks = response.tool_calls.some(
+            (tc) => tc.function.name === "task_write",
           );
-          if (isPlanningCall) {
-            hasPlan = true;
-            console.log(
-              `[orchestrator] 📋 PLAN CREATED via ${response.tool_calls.find((tc) => ["task_write", "think"].includes(tc.function.name)).function.name}`,
-            );
+          if (createdTasks) {
+            hasTaskPlan = true;
+            console.log(`[orchestrator] 📋 TASK PLAN CREATED`);
+          }
+
+          const usedToolFinder = response.tool_calls.some(
+            (tc) => tc.function.name === "tool_finder",
+          );
+          if (usedToolFinder) {
+            hasToolFinder = true;
+            console.log(`[orchestrator] 🧭 TOOL FINDER CALLED`);
           }
 
           // PHASE 2 & 3: PLAN & EXECUTE
@@ -359,100 +363,219 @@ After planning, you can proceed with execution.`,
   }
 
   /**
-   * Detect if a task is complex and requires planning
+   * Detect if a task is complex and requires planning (Claude Cowork-style)
    * @param {string} userMessage
    * @returns {boolean}
    */
   detectComplexTask(userMessage) {
     const msg = userMessage.toLowerCase();
+    const matchesAny = (patterns) => patterns.some((p) => p.test(msg));
 
-    // URLs are simple - just fetch and summarize
-    if (this.extractUrls(userMessage).length > 0) {
-      console.log(`[orchestrator] ✓ URL detected - skipping planning`);
+    // Simple queries: questions, info requests, greetings, URLs, math
+    const simplePatterns = [
+      /^(what|who|when|where|why|how)\s/i,
+      /^(tell me|show me|explain|describe)\s/i,
+      /^(list|display|view)\s/i,
+      /\b(hello|hi|hey|thanks|thank you)\b/i,
+      /^(add|subtract|multiply|divide|calculate)\s/i,
+      /^\d+\s*[\+\-\*\/]/i,
+    ];
+
+    // Complex indicators: code work, debugging, features, analysis
+    const complexPatterns = [
+      /\b(create|build|implement|refactor|migrate)\b/i,
+      /\b(fix|debug|solve|resolve)\b.{0,20}\b(bug|issue|error|problem)\b/i,
+      /\b(add|remove|update|modify|change).{0,20}\b(feature|functionality|component)\b/i,
+      /\b(test|analyze|research|investigate)\b/i,
+      /\band\b.*\band\b/i,
+      /\bthen\b/i,
+      /\d+[\.\)]\s/,
+    ];
+
+    const wordCount = userMessage.trim().split(/\s+/).length;
+    const isComplexByPattern = matchesAny(complexPatterns);
+
+    // Very short messages are almost always simple follow-ups unless they match complex patterns
+    if (wordCount <= 8 && !isComplexByPattern) {
+      console.log(
+        `[orchestrator] ✓ Short message (${wordCount} words) - treating as simple`,
+      );
       return false;
     }
 
-    // Keywords that indicate complex tasks
-    const complexKeywords = [
-      "find and",
-      "search and",
-      "create and",
-      "build",
-      "setup",
-      "analyze",
-      "fix",
-      "debug",
-      "refactor",
-      "implement",
-      "compare",
-      "organize",
-      "migrate",
-      "convert",
-      "install",
-      "configure",
-      "deploy",
-      "research",
-    ];
-
-    // Simple queries that don't need planning
-    const simpleKeywords = [
-      "what is",
-      "what are",
-      "how do",
-      "explain",
-      "tell me",
-      "show me",
-      "list",
-      "get",
-      "read",
-      "open",
-    ];
-
-    // Check for simple queries first
-    for (const keyword of simpleKeywords) {
-      if (msg.startsWith(keyword)) {
-        console.log(
-          `[orchestrator] ✓ Simple query detected: "${keyword}" - skipping planning`,
-        );
-        return false;
-      }
-    }
-
-    // Check for complex indicators
-    for (const keyword of complexKeywords) {
-      if (msg.includes(keyword)) {
-        console.log(
-          `[orchestrator] 🎯 Complex task detected: "${keyword}" - planning required`,
-        );
-        return true;
-      }
-    }
-
-    // Check for conjunctions indicating multi-step tasks
     if (
-      msg.includes(" and ") ||
-      msg.includes(" then ") ||
-      msg.includes(" after ")
+      matchesAny(simplePatterns) ||
+      this.extractUrls(userMessage).length > 0
     ) {
-      console.log(
-        `[orchestrator] 🎯 Multi-step task detected - planning required`,
-      );
-      return true;
+      console.log(`[orchestrator] ✓ Simple query - skipping tasks`);
+      return false;
     }
 
-    // Check for multiple sentences (typically complex)
-    const sentences = userMessage
-      .split(/[.!?]+/)
-      .filter((s) => s.trim().length > 0);
-    if (sentences.length > 1) {
-      console.log(
-        `[orchestrator] 🎯 Multi-sentence request detected - planning required`,
-      );
-      return true;
+    const isComplex = isComplexByPattern || wordCount > 20;
+    console.log(
+      `[orchestrator] ✓ ${isComplex ? "Complex task - tasks required" : "Simple task - skipping tasks"}`,
+    );
+    return isComplex;
+  }
+
+  /**
+   * Validate tool call order for enforced workflow (Claude Cowork-style).
+   * Only enforces tasks for complex multi-step work.
+   * @param {Array} toolCalls
+   * @param {{ hasTaskPlan: boolean, hasToolFinder: boolean }} state
+   * @param {string} userMessage - Original user message to check complexity
+   * @returns {{ type: string, message: string } | null}
+   */
+  getWorkflowViolation(
+    toolCalls,
+    { hasTaskPlan, hasToolFinder },
+    userMessage = "",
+  ) {
+    const planningTools = new Set(["task_write", "think", "ask_user"]);
+    const toolNames = toolCalls.map((tc) => tc?.function?.name).filter(Boolean);
+
+    const hasTaskWrite = toolNames.includes("task_write");
+    const hasToolFinderCall = toolNames.includes("tool_finder");
+    const hasNonPlanning = toolNames.some(
+      (name) => !planningTools.has(name) && name !== "tool_finder",
+    );
+
+    // Check if this is actually a complex task that needs planning
+    const needsTasks = this.detectComplexTask(userMessage);
+
+    // COMPLEX TASKS: Enforce task_write first
+    if (!hasTaskPlan && needsTasks) {
+      if (!hasTaskWrite) {
+        return {
+          type: "task_write_required",
+          message: `STOP: This is a complex task that requires planning.
+
+REQUIRED ACTION: Call task_write({ tasks: [...] }) to create specific, actionable tasks.
+Example: task_write({ title: "Fix Login Bug", tasks: [
+  { id: "1", task: "Reproduce the bug in dev environment" },
+  { id: "2", task: "Identify root cause in auth.js" },
+  { id: "3", task: "Implement fix with proper error handling" }
+]})
+
+After tasks are created, call tool_finder if tools are needed.`,
+        };
+      }
+
+      if (hasToolFinderCall || hasNonPlanning) {
+        return {
+          type: "task_write_only",
+          message: `STOP: Task planning must be the only action right now.
+
+REQUIRED ACTION: Call task_write({ tasks: [...] }) only. Do not use other tools yet.`,
+        };
+      }
+
+      return null;
     }
 
-    console.log(`[orchestrator] ✓ Standard query - optional planning`);
-    return false;
+    // BOTH SIMPLE & COMPLEX: Enforce tool_finder ONLY for unknown/rare tools
+    // Common tools (run_command, file_read, file_write, etc.) don't need discovery
+    if (!hasToolFinder && hasNonPlanning) {
+      const commonTools = new Set([
+        "run_command",
+        "run_script",
+        "open_app",
+        "file_read",
+        "file_write",
+        "file_info",
+        "list_directory",
+        "find_file",
+        "edit_file",
+        "append_file",
+        "create_directory",
+        "rename_file",
+        "delete_file",
+        "web_search",
+        "fetch_url",
+        "git_status",
+        "git_log",
+        "git_branch",
+        "calculate",
+        "get_system_info",
+        "get_current_time",
+      ]);
+
+      const attemptedTool = toolNames.find(
+        (name) => !planningTools.has(name) && name !== "tool_finder",
+      );
+
+      // Only require tool_finder if the tool is NOT in the common set
+      const isUncommonTool = attemptedTool && !commonTools.has(attemptedTool);
+
+      if (isUncommonTool && !hasToolFinderCall) {
+        // Smart query suggestions based on tool category
+        const querySuggestions = [
+          { keywords: ["search", "web"], query: "search web news" },
+          { keywords: ["file", "read", "write"], query: "file operations" },
+          { keywords: ["command", "shell", "run"], query: "run commands" },
+          { keywords: ["open", "app"], query: "open application" },
+        ];
+
+        const suggestion = querySuggestions.find((s) =>
+          s.keywords.some((kw) => attemptedTool?.includes(kw)),
+        );
+        const suggestedQuery = suggestion?.query || "appropriate tools";
+
+        return {
+          type: "tool_finder_required",
+          message: `STOP: You must call tool_finder before using "${attemptedTool}".
+
+REQUIRED ACTION: Call tool_finder({ query: "${suggestedQuery}" }) first to discover this tool.
+
+The user asked: "${userMessage.substring(0, 100)}..."
+Common tools (run_command, file_read, web_search, etc.) don't need discovery.`,
+        };
+      }
+
+      // If tool_finder is bundled with execution, that's okay for common tools
+      // Only enforce separation for uncommon tools
+      const hasUncommonTool = toolNames.some((name) => {
+        const commonTools = new Set([
+          "run_command",
+          "run_script",
+          "open_app",
+          "file_read",
+          "file_write",
+          "file_info",
+          "list_directory",
+          "find_file",
+          "edit_file",
+          "append_file",
+          "create_directory",
+          "rename_file",
+          "delete_file",
+          "web_search",
+          "fetch_url",
+          "git_status",
+          "git_log",
+          "git_branch",
+          "calculate",
+          "get_system_info",
+          "get_current_time",
+        ]);
+        return (
+          !planningTools.has(name) &&
+          name !== "tool_finder" &&
+          !commonTools.has(name)
+        );
+      });
+
+      if (hasToolFinderCall && hasUncommonTool) {
+        return {
+          type: "tool_finder_only",
+          message: `STOP: Tool discovery must happen before any execution.
+
+REQUIRED ACTION: Call tool_finder({ query: "..." }) only. Do not execute other tools in the same response.`,
+        };
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -486,7 +609,7 @@ After planning, you can proceed with execution.`,
   async *executePlanPhase(toolCalls) {
     // Check if this is a planning tool (task_write, think, etc.)
     const isPlanningTool = toolCalls.some((tc) =>
-      ["task_write", "think", "tool_search"].includes(tc.function.name),
+      ["task_write", "think", "ask_user"].includes(tc.function.name),
     );
 
     if (isPlanningTool) {
@@ -582,12 +705,43 @@ After planning, you can proceed with execution.`,
         data: { name: toolCall.function.name, result },
       };
 
+      // Enhanced task streaming (Claude Cowork-style)
       if (toolCall.function.name.startsWith("task_")) {
         const taskPayload = result?.plan || result;
         if (taskPayload && taskPayload.tasks) {
+          // Find current in-progress task for visibility
+          const inProgressTask = taskPayload.tasks.find(
+            (t) => t.status === "in_progress",
+          );
+          const completedCount = taskPayload.tasks.filter(
+            (t) => t.status === "completed",
+          ).length;
+          const totalCount = taskPayload.tasks.length;
+
           yield {
             type: "tasks",
-            data: taskPayload,
+            data: {
+              ...taskPayload,
+              currentTask: inProgressTask || null,
+              progress: {
+                completed: completedCount,
+                total: totalCount,
+                percentage: Math.round((completedCount / totalCount) * 100),
+              },
+            },
+          };
+        }
+
+        // If this was a task_update, also emit a specific status change event
+        if (toolCall.function.name === "task_update" && result?.updated) {
+          yield {
+            type: "task_status_change",
+            data: {
+              taskId: result.updated,
+              oldStatus: result.oldStatus,
+              newStatus: result.newStatus,
+              timestamp: new Date().toISOString(),
+            },
           };
         }
       }
@@ -716,6 +870,14 @@ After planning, you can proceed with execution.`,
       ...context,
       memory: this.memory.getCombinedMemory(),
     };
+
+    // Add relevant memories from semantic search (if available)
+    if (context.relevantMemories && context.relevantMemories.length > 0) {
+      const relevantSection = context.relevantMemories
+        .map((m) => `- ${m.content}`)
+        .join("\n");
+      memoryContext.relevantContext = `\n## Relevant Past Context\n${relevantSection}`;
+    }
 
     const basePrompt = this.promptBuilder.build({
       tools: this.tools.getDefinitions(),

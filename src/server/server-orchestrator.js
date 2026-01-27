@@ -13,12 +13,18 @@ const { loadSettings } = require("./utils/settings-store");
 const { getServerConfig } = require("./utils/server-config");
 const { createAuthMiddleware } = require("./utils/auth");
 const { ConfirmationStore } = require("./utils/confirmation-store");
+const { MemoryManager } = require("./utils/memory-manager");
+const { setMemoryManager } = require("./tools/memory");
 const { Orchestrator, OllamaClient, ToolRegistry, SkillLoader, PromptBuilder } = require("./orchestrator");
+const { ConversationStore } = require("./utils/conversation-store");
 
-const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH } =
+const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH, appPath: APP_PATH } =
   getServerConfig();
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 const confirmationStore = new ConfirmationStore();
+const conversationStore = new ConversationStore();
+const memoryManager = new MemoryManager({ appPath: APP_PATH });
+setMemoryManager(memoryManager);
 
 // ===== Model Persistence =====
 
@@ -48,6 +54,7 @@ const orchestrator = new Orchestrator({
     baseUrl: OLLAMA_BASE,
     model: loadLastModel() || 'nemotron-3-nano:30b'
   }),
+  memoryManager,
   onStateChange: ({ from, to }) => {
     console.log(`[orchestrator] ${from} -> ${to}`);
   },
@@ -129,7 +136,7 @@ app.post("/chat", async (req, res) => {
     const userMsg = String(req.body?.message ?? "");
     const requestedModel = req.body?.model ? String(req.body.model) : "";
     const lastModel = loadLastModel();
-    const useOrchestrator = req.body?.useOrchestrator !== false;
+    const clientHistory = req.body?.history || []; // Accept history from client
     
     // Choose model
     let availableModels = [];
@@ -158,23 +165,45 @@ app.post("/chat", async (req, res) => {
     const systemPrompt = settings.systemPrompt || SYSTEM_PROMPT;
     const temperature = typeof settings.temperature === "number" ? settings.temperature : 0.7;
 
-    // Use simple streaming for now (orchestrator integration can be added for tool calls)
+    // Build messages with conversation history for context
+    // Priority: client-provided history > stored history
+    const recentHistory = clientHistory.length > 0 
+      ? clientHistory.slice(-10) // Last 10 from client
+      : conversationStore.getRecentHistory(10); // Last 10 from store
+
+    console.log(`[chat] 📚 Using ${recentHistory.length} messages from history`);
+    if (recentHistory.length > 0) {
+      console.log(`[chat] Last message in history: ${recentHistory[recentHistory.length - 1]?.content?.substring(0, 50)}...`);
+    }
+
+    // Build messages array following OpenAI/Claude pattern:
+    // 1. System prompt (just once, without duplicating history)
+    // 2. Full conversation history as alternating user/assistant messages
+    // 3. Current user message
+    const messages = [
+      ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
+      ...recentHistory,
+      { role: "user", content: userMsg }
+    ];
+
+    console.log(`[chat] 📤 Sending ${messages.length} total messages to LLM`);
+
+    // Stream response
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("X-Accel-Buffering", "no");
 
-    const messages = [
-      ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
-      { role: "user", content: userMsg }
-    ];
-
-    // Stream response
+    let fullResponse = "";
     for await (const chunk of orchestrator.ollama.chatStream(messages, { 
       model: chosenModel, 
       temperature 
     })) {
       res.write(chunk.content);
+      fullResponse += chunk.content;
     }
+    
+    // Persist the exchange for future context
+    conversationStore.addExchange(userMsg, fullResponse);
     
     res.end();
     
@@ -189,16 +218,39 @@ app.post("/chat/agent", async (req, res) => {
   try {
     const userMsg = String(req.body?.message ?? "");
     const chosenModel = req.body?.model || loadLastModel() || "nemotron-3-nano:30b";
+    const clientHistory = req.body?.history || [];
     
     res.setHeader("Content-Type", "application/x-ndjson");
     res.setHeader("Cache-Control", "no-cache");
     
-    // Process through orchestrator
+    // Get conversation context for the orchestrator
+    const recentHistory = clientHistory.length > 0 
+      ? clientHistory.slice(-10)
+      : conversationStore.getRecentHistory(10);
+    
+    // Search for relevant past context based on current query
+    const relevantContext = conversationStore.searchRelevant(userMsg, 3);
+    
+    let fullResponse = "";
+    
+    // Process through orchestrator with conversation context
     for await (const event of orchestrator.process(userMsg, { 
       model: chosenModel,
-      cwd: process.cwd()
+      cwd: process.cwd(),
+      conversationHistory: recentHistory,
+      relevantMemories: relevantContext
     })) {
       res.write(JSON.stringify(event) + "\n");
+      
+      // Capture the final response for persistence
+      if (event.type === "response" && event.data?.content) {
+        fullResponse = event.data.content;
+      }
+    }
+    
+    // Persist the exchange for future context
+    if (fullResponse) {
+      conversationStore.addExchange(userMsg, fullResponse);
     }
     
     res.end();

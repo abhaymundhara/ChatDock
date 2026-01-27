@@ -33,20 +33,41 @@ function computeDependencies(tasks) {
 
 function normalizeTask(input, index, existing = null) {
   const id = input.id || existing?.id || `task_${index + 1}`;
-  const taskText = input.task ?? input.title ?? existing?.task ?? "";
+  const task = input.task ?? input.title ?? existing?.task ?? "";
   const status = input.status || existing?.status || "pending";
   const dependsOn = Array.isArray(input.dependsOn)
     ? input.dependsOn
     : existing?.dependsOn || [];
   const notes = input.notes ?? existing?.notes;
 
-  return {
-    id,
-    task: taskText,
-    status,
-    dependsOn,
-    ...(notes !== undefined ? { notes } : {}),
-  };
+  const normalized = { id, task, status, dependsOn };
+  if (notes !== undefined) normalized.notes = notes;
+  return normalized;
+}
+
+function normalizeTasksInput(tasks) {
+  let normalized = tasks;
+
+  // Parse JSON string if provided
+  if (typeof normalized === "string") {
+    try {
+      normalized = JSON.parse(normalized);
+    } catch {
+      // Will throw clearer error below if still not an array
+    }
+  }
+
+  // Extract tasks array from object wrapper
+  if (normalized?.tasks && Array.isArray(normalized.tasks)) {
+    normalized = normalized.tasks;
+  }
+
+  if (!Array.isArray(normalized)) {
+    throw new Error("tasks must be an array");
+  }
+
+  // Convert string tasks to objects
+  return normalized.map((task) => (typeof task === "string" ? { task } : task));
 }
 
 function loadTasksFromDisk() {
@@ -83,7 +104,7 @@ function loadTasksFromDisk() {
 const task_write = {
   name: "task_write",
   description:
-    "Creates or updates a task list/plan for the current request. Helps organize complex multi-step tasks.",
+    "Creates or updates a task list/plan for the current request. CRITICAL WORKFLOW: 1) Write complete lists with specific actionable items, 2) Mark ONE task 'in_progress' before starting work, 3) Complete the work for that task, 4) Mark it 'completed' IMMEDIATELY, 5) Move to next task. This ensures progress visibility and proper task tracking. Use for complex multi-step work requiring planning and tracking.",
   parameters: {
     type: "object",
     properties: {
@@ -126,6 +147,7 @@ const task_write = {
   keywords: ["task", "plan", "list", "organize"],
 
   run: async ({ title, tasks, mode = "replace" }) => {
+    const normalizedTasksInput = normalizeTasksInput(tasks);
     const tasksDir = getTasksDir();
     if (currentTasksDir && currentTasksDir !== tasksDir) {
       currentTasks = null;
@@ -140,7 +162,7 @@ const task_write = {
         currentTasks.tasks.map((task) => [task.id, task]),
       );
       let nextId = currentTasks.tasks.length + 1;
-      tasks.forEach((taskInput, index) => {
+      normalizedTasksInput.forEach((taskInput, index) => {
         const inputWithId = taskInput.id
           ? taskInput
           : { ...taskInput, id: `task_${nextId++}` };
@@ -165,7 +187,7 @@ const task_write = {
       };
       currentTasksDir = tasksDir;
     } else {
-      const normalized = tasks.map((taskInput, index) =>
+      const normalized = normalizedTasksInput.map((taskInput, index) =>
         normalizeTask(taskInput, index),
       );
       currentTasks = {
@@ -248,7 +270,8 @@ const task_read = {
  */
 const task_update = {
   name: "task_update",
-  description: "Updates the status of a specific task in the current plan.",
+  description:
+    "Updates the status of a specific task in the current plan. WORKFLOW: Mark ONE task 'in_progress' before starting work, then mark it 'completed' IMMEDIATELY after finishing. Do not batch status updates - update individually as work progresses to provide visibility.",
   parameters: {
     type: "object",
     properties: {
@@ -276,6 +299,37 @@ const task_update = {
       throw new Error(`Task not found: ${taskId}`);
     }
 
+    // Workflow validation (Claude Cowork-style)
+    const currentStatus = task.status;
+
+    // Enforce only ONE task can be in_progress at a time
+    if (status === "in_progress") {
+      const otherInProgress = currentTasks.tasks.find(
+        (t) => t.id !== taskId && t.status === "in_progress",
+      );
+      if (otherInProgress) {
+        console.warn(
+          `[task_update] ⚠️  Warning: Task "${otherInProgress.id}" is already in progress. ` +
+            `Complete it before starting "${taskId}". Only ONE task should be in-progress at a time.`,
+        );
+        // Don't throw - just warn, but allow override for flexibility
+      }
+    }
+
+    // Log state transitions for visibility
+    if (currentStatus !== status) {
+      const statusEmojis = {
+        pending: "⏸️",
+        in_progress: "▶️",
+        completed: "✅",
+        blocked: "🚫",
+      };
+      const emoji = statusEmojis[status] || "📝";
+      console.log(
+        `[task_update] ${emoji} Task "${taskId}": ${currentStatus} → ${status}`,
+      );
+    }
+
     task.status = status;
     currentTasks.updatedAt = new Date().toISOString();
     currentTasks.dependencies = computeDependencies(currentTasks.tasks);
@@ -288,6 +342,7 @@ const task_update = {
     return {
       updated: taskId,
       newStatus: status,
+      oldStatus: currentStatus,
       plan: currentTasks,
     };
   },

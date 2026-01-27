@@ -136,7 +136,7 @@ class ToolRegistry {
       'fetch_url',
       
       // Tool discovery
-      'tool_search',
+      'tool_finder',
       'tool_list',
       'tool_info',
       

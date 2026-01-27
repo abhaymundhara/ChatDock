@@ -15,20 +15,21 @@ ChatDock is a local-first, agentic AI assistant that runs on your desktop. It us
 1. [Overview](about:blank#overview)
 2. [Architecture](about:blank#architecture)
 3. [The Agentic Loop](about:blank#the-agentic-loop)
-4. [Extended Thinking (Chain of Thought)](about:blank#extended-thinking-chain-of-thought)
-5. [Tools](about:blank#tools)
-6. [Tool Search & Discovery](about:blank#tool-search--discovery)
-7. [Code Execution Tool](about:blank#code-execution-tool)
-8. [Programmatic Tool Calling](about:blank#programmatic-tool-calling)
-9. [Skills](about:blank#skills)
-10. [Files API](about:blank#files-api)
-11. [Memory & Context](about:blank#memory--context)
-12. [Document Intelligence (PageIndex)](about:blank#document-intelligence-pageindex)
-13. [Prompt Caching](about:blank#prompt-caching)
-14. [Configuration](about:blank#configuration)
-15. [Security & Permissions](about:blank#security--permissions)
-16. [Best Practices](about:blank#best-practices)
-17. [Troubleshooting](about:blank#troubleshooting)
+4. [Task Management (Claude Cowork-Style)](about:blank#task-management)
+5. [Extended Thinking (Chain of Thought)](about:blank#extended-thinking-chain-of-thought)
+6. [Tools](about:blank#tools)
+7. [Tool Search & Discovery](about:blank#tool-search--discovery)
+8. [Code Execution Tool](about:blank#code-execution-tool)
+9. [Programmatic Tool Calling](about:blank#programmatic-tool-calling)
+10. [Skills](about:blank#skills)
+11. [Files API](about:blank#files-api)
+12. [Memory & Context](about:blank#memory--context)
+13. [Document Intelligence (PageIndex)](about:blank#document-intelligence-pageindex)
+14. [Prompt Caching](about:blank#prompt-caching)
+15. [Configuration](about:blank#configuration)
+16. [Security & Permissions](about:blank#security--permissions)
+17. [Best Practices](about:blank#best-practices)
+18. [Troubleshooting](about:blank#troubleshooting)
 
 ---
 
@@ -40,17 +41,17 @@ ChatDock transforms from a simple chat interface into an **autonomous agent** ca
 - Running shell commands
 - Searching the web
 - Managing Git repositories
-- Planning and executing multi-step tasks
+- Planning and executing multi-step tasks with Claude Cowork-inspired workflow
 - Learning your preferences over time
 
 ### Core Principles
 
-| Principle | Description |
-| --- | --- |
-| **Local-First** | All LLM inference happens on your machine via Ollama. No data leaves your computer. |
-| **No API Keys** | Every tool is implemented using native system capabilities. Zero cloud dependencies. |
-| **8GB RAM Optimized** | Designed to run efficiently on laptops with limited resources. |
-| **User Sovereignty** | You can inspect, modify, or extend every tool and skill. |
+| Principle             | Description                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| **Local-First**       | All LLM inference happens on your machine via Ollama. No data leaves your computer.  |
+| **No API Keys**       | Every tool is implemented using native system capabilities. Zero cloud dependencies. |
+| **8GB RAM Optimized** | Designed to run efficiently on laptops with limited resources.                       |
+| **User Sovereignty**  | You can inspect, modify, or extend every tool and skill.                             |
 
 ---
 
@@ -208,17 +209,101 @@ To ensure reliable tool calling on local models, ChatDock forces the LLM to resp
 
 ---
 
+## Task Management (Claude Cowork-Style)
+
+ChatDock implements a sophisticated task management system inspired by Claude Cowork's approach to transparent, structured work tracking. This system is essential for handling complex multi-step work with clear visibility into progress and execution state.
+
+### Overview
+
+The task workflow provides:
+
+- **Structured Planning**: Break complex work into specific, actionable items
+- **Status Tracking**: Tasks progress through defined states
+- **Dependency Management**: Define relationships between tasks
+- **Progress Visibility**: Real-time UI updates and progress indicators
+- **Workflow Enforcement**: One active task at a time for focused execution
+
+### Core Workflow Pattern
+
+```
+1. PLAN     → Create complete task list with specific items
+2. MARK     → Mark ONE task as 'in_progress' before starting
+3. EXECUTE  → Complete the work for that specific task
+4. COMPLETE → Mark it 'completed' IMMEDIATELY after finishing
+5. REPEAT   → Move to next task and repeat steps 2-4
+```
+
+### Task States
+
+| State         | Icon | Description                                  |
+| ------------- | ---- | -------------------------------------------- |
+| `pending`     | ○    | Task not yet started                         |
+| `in_progress` | ▶️   | Currently being worked on (only ONE allowed) |
+| `completed`   | ✅   | Successfully finished                        |
+| `blocked`     | 🚫   | Cannot proceed due to dependency or issue    |
+
+### Quick Example
+
+```javascript
+// 1. Create plan
+task_write({
+  title: "Implement Login Feature",
+  tasks: [
+    { id: "task_1", task: "Create login form UI" },
+    { id: "task_2", task: "Add authentication API", dependsOn: ["task_1"] },
+    { id: "task_3", task: "Write unit tests", dependsOn: ["task_2"] },
+  ],
+});
+
+// 2. Mark in-progress
+task_update({ taskId: "task_1", status: "in_progress" });
+
+// 3. [Work happens...]
+
+// 4. Mark completed immediately
+task_update({ taskId: "task_1", status: "completed" });
+
+// 5. Move to next task
+task_update({ taskId: "task_2", status: "in_progress" });
+```
+
+### UI Features
+
+- **Progress Bar**: Visual indicator showing completed/total tasks
+- **Active Task Highlighting**: In-progress task has prominent pulsing glow
+- **Inline Editing**: Click titles or status pills to edit
+- **Real-time Streaming**: Updates appear instantly without refresh
+
+### When to Use
+
+**Use task_write for:**
+
+- Multi-step work (3+ steps)
+- Complex requests with dependencies
+- Work requiring progress tracking
+- Breaking down ambiguous requests
+
+**Skip task_write for:**
+
+- Single-step operations
+- Simple information lookups
+- Trivial file edits
+
+📖 **[Complete Task Workflow Documentation](docs/TASK_WORKFLOW.md)**
+
+---
+
 ## Extended Thinking (Chain of Thought)
 
 When faced with complex tasks like research, analysis, or multi-step problem-solving, giving the LLM space to “think” dramatically improves performance. ChatDock implements **Chain of Thought (CoT)** prompting to encourage step-by-step reasoning.
 
 ### Why Extended Thinking?
 
-| Without CoT | With CoT |
-| --- | --- |
+| Without CoT               | With CoT                                                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | “The cheapest hotel is X” | “Let me analyze this step by step: First, I’ll search for hotels. Then compare prices. Consider location factors…” |
-| Quick but often wrong | Slower but significantly more accurate |
-| Black-box answer | Transparent reasoning process |
+| Quick but often wrong     | Slower but significantly more accurate                                                                             |
+| Black-box answer          | Transparent reasoning process                                                                                      |
 
 ### How It Works
 
@@ -288,9 +373,9 @@ The thinking process is shown in the UI as an expandable “Thinking…” secti
 ```json
 // In settings.json
 {
-  "thinkingMode": "balanced",      // "quick" | "balanced" | "deep"
-  "showThinkingProcess": true,     // Display thinking in UI
-  "thinkingBudgetTokens": 500      // Max tokens for thinking
+  "thinkingMode": "balanced", // "quick" | "balanced" | "deep"
+  "showThinkingProcess": true, // Display thinking in UI
+  "thinkingBudgetTokens": 500 // Max tokens for thinking
 }
 ```
 
@@ -304,57 +389,57 @@ Tools are **atomic, executable functions** that perform actions on the system. T
 
 ### File System Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `read_file` | Reads the content of a file | `path: string` |
-| `write_file` | Creates or overwrites a file | `path: string, content: string` |
-| `edit_file` | Applies surgical line-based edits | `path: string, edits: array` |
-| `list_directory` | Lists contents of a directory | `path: string` |
-| `glob` | Finds files matching a pattern | `pattern: string, cwd?: string` |
-| `find_file` | Searches for a file by name | `name: string, directory?: string` |
+| Tool             | Description                       | Parameters                         |
+| ---------------- | --------------------------------- | ---------------------------------- |
+| `read_file`      | Reads the content of a file       | `path: string`                     |
+| `write_file`     | Creates or overwrites a file      | `path: string, content: string`    |
+| `edit_file`      | Applies surgical line-based edits | `path: string, edits: array`       |
+| `list_directory` | Lists contents of a directory     | `path: string`                     |
+| `glob`           | Finds files matching a pattern    | `pattern: string, cwd?: string`    |
+| `find_file`      | Searches for a file by name       | `name: string, directory?: string` |
 
 ### Search & Discovery Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `grep_search` | Regex search within files | `pattern: string, path: string, flags?: string` |
-| `web_search` | Searches the web | `query: string` |
-| `fetch_url` | Downloads and parses a webpage | `url: string` |
+| Tool          | Description                    | Parameters                                      |
+| ------------- | ------------------------------ | ----------------------------------------------- |
+| `grep_search` | Regex search within files      | `pattern: string, path: string, flags?: string` |
+| `web_search`  | Searches the web               | `query: string`                                 |
+| `fetch_url`   | Downloads and parses a webpage | `url: string`                                   |
 
 ### Shell & System Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `run_command` | Executes a shell command | `command: string, cwd?: string` |
-| `get_system_info` | Returns OS, CPU, RAM stats | None |
-| `get_process_list` | Lists running processes | None |
+| Tool               | Description                | Parameters                      |
+| ------------------ | -------------------------- | ------------------------------- |
+| `run_command`      | Executes a shell command   | `command: string, cwd?: string` |
+| `get_system_info`  | Returns OS, CPU, RAM stats | None                            |
+| `get_process_list` | Lists running processes    | None                            |
 
 ### Git Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `git_status` | Shows repository status | `cwd?: string` |
-| `git_diff` | Shows file differences | `cwd?: string, staged?: boolean` |
-| `git_log` | Shows commit history | `cwd?: string, count?: number` |
-| `git_commit` | Commits staged changes | `message: string, cwd?: string` |
-| `git_push` | Pushes to remote | `cwd?: string` |
+| Tool         | Description             | Parameters                       |
+| ------------ | ----------------------- | -------------------------------- |
+| `git_status` | Shows repository status | `cwd?: string`                   |
+| `git_diff`   | Shows file differences  | `cwd?: string, staged?: boolean` |
+| `git_log`    | Shows commit history    | `cwd?: string, count?: number`   |
+| `git_commit` | Commits staged changes  | `message: string, cwd?: string`  |
+| `git_push`   | Pushes to remote        | `cwd?: string`                   |
 
 ### Planning Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `todo_write` | Creates/updates task list | `tasks: array` |
-| `todo_read` | Reads current task list | None |
-| `ask_user` | Prompts user for input | `question: string` |
+| Tool         | Description               | Parameters         |
+| ------------ | ------------------------- | ------------------ |
+| `todo_write` | Creates/updates task list | `tasks: array`     |
+| `todo_read`  | Reads current task list   | None               |
+| `ask_user`   | Prompts user for input    | `question: string` |
 
 ### Utility Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `clipboard_read` | Reads clipboard content | None |
-| `clipboard_write` | Writes to clipboard | `content: string` |
-| `open_url` | Opens URL in browser | `url: string` |
-| `get_current_time` | Returns current datetime | None |
+| Tool               | Description              | Parameters        |
+| ------------------ | ------------------------ | ----------------- |
+| `clipboard_read`   | Reads clipboard content  | None              |
+| `clipboard_write`  | Writes to clipboard      | `content: string` |
+| `open_url`         | Opens URL in browser     | `url: string`     |
+| `get_current_time` | Returns current datetime | None              |
 
 ### Tool Definition Format
 
@@ -363,29 +448,29 @@ Each tool is a Node.js module in `src/server/tools/`:
 ```jsx
 // src/server/tools/file_system.js
 
-const fs = require('node:fs');
-const path = require('node:path');
+const fs = require("node:fs");
+const path = require("node:path");
 
 const read_file = {
-  name: 'read_file',
-  description: 'Reads the full content of a file at the specified path.',
+  name: "read_file",
+  description: "Reads the full content of a file at the specified path.",
   parameters: {
-    type: 'object',
+    type: "object",
     properties: {
       path: {
-        type: 'string',
-        description: 'Absolute path to the file.'
-      }
+        type: "string",
+        description: "Absolute path to the file.",
+      },
     },
-    required: ['path']
+    required: ["path"],
   },
   run: async ({ path: filePath }) => {
     const absolutePath = path.resolve(filePath);
     if (!fs.existsSync(absolutePath)) {
       throw new Error(`File not found:${absolutePath}`);
     }
-    return fs.readFileSync(absolutePath, 'utf-8');
-  }
+    return fs.readFileSync(absolutePath, "utf-8");
+  },
 };
 
 module.exports = { read_file };
@@ -407,10 +492,10 @@ When working with hundreds or thousands of tools, loading all definitions into t
 
 ### The Problem with Static Tool Loading
 
-| Approach | Tools in Context | Token Usage | Local Model Performance |
-| --- | --- | --- | --- |
-| Load All Tools | 50+ tools | 3,000+ tokens | ❌ Poor accuracy |
-| Tool Search | 3-5 relevant tools | 300-500 tokens | ✅ High accuracy |
+| Approach       | Tools in Context   | Token Usage    | Local Model Performance |
+| -------------- | ------------------ | -------------- | ----------------------- |
+| Load All Tools | 50+ tools          | 3,000+ tokens  | ❌ Poor accuracy        |
+| Tool Search    | 3-5 relevant tools | 300-500 tokens | ✅ High accuracy        |
 
 ### How Tool Search Works
 
@@ -438,8 +523,8 @@ User Request: "Find my coursework file"
 
 ### The `tool_search` Meta-Tool
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
+| Tool          | Description                                  | Parameters                      |
+| ------------- | -------------------------------------------- | ------------------------------- |
 | `tool_search` | Searches the tool catalog for relevant tools | `query: string, limit?: number` |
 
 ### Implementation
@@ -490,14 +575,14 @@ ChatDock includes a **Code Execution Tool** that allows the agent to write and r
 
 ### Capabilities
 
-| Capability | Description | Example |
-| --- | --- | --- |
-| **Data Analysis** | Process CSV, JSON, parse logs | “Analyze my sales data” |
-| **Calculations** | Complex math, statistics | “Calculate compound interest” |
-| **File Processing** | Transform, convert, generate files | “Convert this CSV to JSON” |
-| **Visualizations** | Generate charts and graphs | “Plot my expenses by month” |
-| **System Commands** | Run Bash commands safely | “List all large files” |
-| **Code Generation** | Write and test code snippets | “Write a Python script to…” |
+| Capability          | Description                        | Example                       |
+| ------------------- | ---------------------------------- | ----------------------------- |
+| **Data Analysis**   | Process CSV, JSON, parse logs      | “Analyze my sales data”       |
+| **Calculations**    | Complex math, statistics           | “Calculate compound interest” |
+| **File Processing** | Transform, convert, generate files | “Convert this CSV to JSON”    |
+| **Visualizations**  | Generate charts and graphs         | “Plot my expenses by month”   |
+| **System Commands** | Run Bash commands safely           | “List all large files”        |
+| **Code Generation** | Write and test code snippets       | “Write a Python script to…”   |
 
 ### The `code_execute` Tool
 
@@ -516,11 +601,11 @@ ChatDock includes a **Code Execution Tool** that allows the agent to write and r
 
 ### Supported Languages
 
-| Language | Runtime | Use Case |
-| --- | --- | --- |
-| JavaScript | Node.js (built-in) | Data processing, file ops |
-| Python | System Python | Data analysis, ML, scripting |
-| Bash | System shell | System commands, file ops |
+| Language   | Runtime            | Use Case                     |
+| ---------- | ------------------ | ---------------------------- |
+| JavaScript | Node.js (built-in) | Data processing, file ops    |
+| Python     | System Python      | Data analysis, ML, scripting |
+| Bash       | System shell       | System commands, file ops    |
 
 ### Sandbox Security
 
@@ -569,12 +654,12 @@ ChatDock:
 
 ### Why Programmatic Tool Calling?
 
-| Traditional Approach | Programmatic Approach |
-| --- | --- |
-| 1 LLM call per tool | Multiple tools in 1 code block |
-| High latency (N round trips) | Low latency (1 execution) |
-| All data goes to context | Filter/process data first |
-| Token expensive | Token efficient |
+| Traditional Approach         | Programmatic Approach          |
+| ---------------------------- | ------------------------------ |
+| 1 LLM call per tool          | Multiple tools in 1 code block |
+| High latency (N round trips) | Low latency (1 execution)      |
+| All data goes to context     | Filter/process data first      |
+| Token expensive              | Token efficient                |
 
 ### How It Works
 
@@ -600,40 +685,40 @@ Within code execution, tools are available via a simple API:
 
 ```jsx
 // Inside code_execute block
-const chatdock = require('@chatdock/tools');
+const chatdock = require("@chatdock/tools");
 
 // Call tools programmatically
-const files = await chatdock.glob({ pattern: '**/*.md' });
+const files = await chatdock.glob({ pattern: "**/*.md" });
 const contents = await Promise.all(
-  files.map(f => chatdock.read_file({ path: f }))
+  files.map((f) => chatdock.read_file({ path: f })),
 );
 
 // Process and filter
-const relevant = contents.filter(c => c.includes('coursework'));
+const relevant = contents.filter((c) => c.includes("coursework"));
 
 // Return only what matters
-return relevant.map(c => c.substring(0, 500));  // First 500 chars each
+return relevant.map((c) => c.substring(0, 500)); // First 500 chars each
 ```
 
 ### Available Tool API
 
 ```jsx
 // File operations
-chatdock.read_file({ path })
-chatdock.write_file({ path, content })
-chatdock.list_directory({ path })
-chatdock.glob({ pattern, cwd })
+chatdock.read_file({ path });
+chatdock.write_file({ path, content });
+chatdock.list_directory({ path });
+chatdock.glob({ pattern, cwd });
 
 // Search
-chatdock.grep_search({ pattern, path })
-chatdock.web_search({ query })
+chatdock.grep_search({ pattern, path });
+chatdock.web_search({ query });
 
 // Git
-chatdock.git_status({ cwd })
-chatdock.git_diff({ cwd })
+chatdock.git_status({ cwd });
+chatdock.git_diff({ cwd });
 
 // System
-chatdock.run_command({ command, cwd })
+chatdock.run_command({ command, cwd });
 ```
 
 ### Example: Multi-File Search
@@ -642,19 +727,20 @@ chatdock.run_command({ command, cwd })
 // Traditional: 10+ LLM round trips
 // Programmatic: 1 code execution
 
-const chatdock = require('@chatdock/tools');
+const chatdock = require("@chatdock/tools");
 
 // Find all JS files
-const files = await chatdock.glob({ pattern: 'src/**/*.js' });
+const files = await chatdock.glob({ pattern: "src/**/*.js" });
 
 // Search each for 'TODO'
 const results = [];
 for (const file of files) {
   const content = await chatdock.read_file({ path: file });
-  if (content.includes('TODO')) {
-    const lines = content.split('\n')
-      .filter(l => l.includes('TODO'))
-      .slice(0, 3);  // Max 3 per file
+  if (content.includes("TODO")) {
+    const lines = content
+      .split("\n")
+      .filter((l) => l.includes("TODO"))
+      .slice(0, 3); // Max 3 per file
     results.push({ file, todos: lines });
   }
 }
@@ -665,12 +751,12 @@ return JSON.stringify(results, null, 2);
 
 ### Benefits
 
-| Metric | Traditional | Programmatic |
-| --- | --- | --- |
-| Latency (10 files) | ~20 seconds | ~2 seconds |
-| Token Usage | ~10,000 tokens | ~500 tokens |
-| LLM Calls | 11 | 2 |
-| Context Pollution | High | Low |
+| Metric             | Traditional    | Programmatic |
+| ------------------ | -------------- | ------------ |
+| Latency (10 files) | ~20 seconds    | ~2 seconds   |
+| Token Usage        | ~10,000 tokens | ~500 tokens  |
+| LLM Calls          | 11             | 2            |
+| Context Pollution  | High           | Low          |
 
 ### Configuration
 
@@ -679,9 +765,9 @@ return JSON.stringify(results, null, 2);
 {
   "programmaticToolCalling": {
     "enabled": true,
-    "maxExecutionTime": 60000,     // 60 seconds
-    "allowedTools": ["all"],       // or specific list
-    "autoOptimize": true           // Auto-suggest programmatic approach
+    "maxExecutionTime": 60000, // 60 seconds
+    "allowedTools": ["all"], // or specific list
+    "autoOptimize": true // Auto-suggest programmatic approach
   }
 }
 ```
@@ -725,25 +811,30 @@ tools_used:
 When asked to edit a file:
 
 ## 1. Understand the Change
+
 -Clarify exactly what needs to be changed
 -If ambiguous, use `ask_user` to confirm
 
 ## 2. Read Before Writing
+
 -Always call `read_file` first
 -Identify the exact lines to modify
 -Never assume file contents
 
 ## 3. Apply Surgical Edits
+
 -Use `edit_file` with precise line ranges
 -Preserve surrounding context
 -Avoid full file rewrites when possible
 
 ## 4. Verify the Change
+
 -Call `read_file` again after editing
 -Confirm the change was applied correctly
 -If in a git repository, show `git_diff` to the user
 
 ## Best Practices
+
 -Never delete files without explicit confirmation
 -Create backups for critical files
 -If unsure, show the proposed change and ask for approval
@@ -759,17 +850,17 @@ Skills are loaded into the agent’s context based on:
 
 ### Shipped Skills
 
-| Skill | Purpose | Key Tools |
-| --- | --- | --- |
-| `project-navigator` | Explore and understand codebases | `list_directory`, `read_file`, `glob` |
-| `code-reader` | Deep-dive into specific files/functions | `read_file`, `grep_search` |
-| `file-editor` | Safely modify files | `read_file`, `edit_file`, `git_diff` |
-| `code-generator` | Create new files from specs | `write_file`, `run_command` |
-| `research-expert` | Multi-step web research | `web_search`, `fetch_url` |
-| `documentation-reader` | Parse and summarize docs | `fetch_url`, `read_file` |
-| `debugger` | Diagnose and fix errors | `grep_search`, `read_file`, `run_command` |
-| `test-runner` | Run and interpret test suites | `run_command` |
-| `memory-architect` | Manage persistent context | `read_file`, `write_file` |
+| Skill                  | Purpose                                 | Key Tools                                 |
+| ---------------------- | --------------------------------------- | ----------------------------------------- |
+| `project-navigator`    | Explore and understand codebases        | `list_directory`, `read_file`, `glob`     |
+| `code-reader`          | Deep-dive into specific files/functions | `read_file`, `grep_search`                |
+| `file-editor`          | Safely modify files                     | `read_file`, `edit_file`, `git_diff`      |
+| `code-generator`       | Create new files from specs             | `write_file`, `run_command`               |
+| `research-expert`      | Multi-step web research                 | `web_search`, `fetch_url`                 |
+| `documentation-reader` | Parse and summarize docs                | `fetch_url`, `read_file`                  |
+| `debugger`             | Diagnose and fix errors                 | `grep_search`, `read_file`, `run_command` |
+| `test-runner`          | Run and interpret test suites           | `run_command`                             |
+| `memory-architect`     | Manage persistent context               | `read_file`, `write_file`                 |
 
 ---
 
@@ -779,26 +870,26 @@ ChatDock provides a comprehensive **Files API** for handling documents, PDFs, an
 
 ### Supported File Types
 
-| Type | Extension | Parsing Method | Use Case |
-| --- | --- | --- | --- |
-| PDF | `.pdf` | `pdf-parse` (text) | Reports, papers, coursework |
-| Word | `.docx` | `mammoth` | Documents, assignments |
-| Markdown | `.md` | Native | Documentation, notes |
-| Plain Text | `.txt` | Native | Logs, config files |
-| HTML | `.html` | `cheerio` | Web pages, saved articles |
-| JSON | `.json` | Native | Data files, configs |
-| CSV | `.csv` | `csv-parse` | Spreadsheets, data |
-| Code | `.js`, `.py`, etc. | Native + syntax highlighting | Source code |
+| Type       | Extension          | Parsing Method               | Use Case                    |
+| ---------- | ------------------ | ---------------------------- | --------------------------- |
+| PDF        | `.pdf`             | `pdf-parse` (text)           | Reports, papers, coursework |
+| Word       | `.docx`            | `mammoth`                    | Documents, assignments      |
+| Markdown   | `.md`              | Native                       | Documentation, notes        |
+| Plain Text | `.txt`             | Native                       | Logs, config files          |
+| HTML       | `.html`            | `cheerio`                    | Web pages, saved articles   |
+| JSON       | `.json`            | Native                       | Data files, configs         |
+| CSV        | `.csv`             | `csv-parse`                  | Spreadsheets, data          |
+| Code       | `.js`, `.py`, etc. | Native + syntax highlighting | Source code                 |
 
 ### Files API Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `file_upload` | Registers a file with the Files API | `path: string` |
-| `file_read` | Reads and parses a file’s content | `file_id: string` |
-| `file_list` | Lists all registered files | None |
-| `file_delete` | Removes a file from the registry | `file_id: string` |
-| `file_info` | Returns metadata about a file | `file_id: string` |
+| Tool          | Description                         | Parameters        |
+| ------------- | ----------------------------------- | ----------------- |
+| `file_upload` | Registers a file with the Files API | `path: string`    |
+| `file_read`   | Reads and parses a file’s content   | `file_id: string` |
+| `file_list`   | Lists all registered files          | None              |
+| `file_delete` | Removes a file from the registry    | `file_id: string` |
+| `file_info`   | Returns metadata about a file       | `file_id: string` |
 
 ### PDF Handling
 
@@ -891,15 +982,18 @@ Stores user preferences and personality context:
 # User Profile
 
 ## Preferences
+
 -Preferred language: Python
 -Code style: PEP 8 with 4-space indentation
 -Prefers concise responses
 
 ## Projects
+
 -Coursework located at: ~/Documents/University/CS101
 -Side project: ~/Code/my-app
 
 ## History
+
 -Last worked on: Belfast hotel research
 -Frequently used tools: file_editor, web_search
 ```
@@ -914,14 +1008,17 @@ Stores the agent’s identity and system instructions:
 You are ChatDock, a local AI assistant running on the user's machine.
 
 ## Core Behaviors
+
 -Always confirm before destructive actions
 -Prefer surgical edits over full file rewrites
 -Cite sources when presenting research
 
 ## Available Tools
+
 [Auto-generated list of loaded tools]
 
 ## Active Skills
+
 [Auto-generated list of loaded skills]
 ```
 
@@ -942,7 +1039,7 @@ ChatDock integrates **PageIndex**, a vectorless, reasoning-based RAG (Retrieval 
 
 ### What is PageIndex?
 
-Traditional RAG systems use vector similarity search, which often retrieves *similar* but not *relevant* information. PageIndex takes a different approach:
+Traditional RAG systems use vector similarity search, which often retrieves _similar_ but not _relevant_ information. PageIndex takes a different approach:
 
 1. **No Vector Database**: Uses document structure and LLM reasoning instead of embeddings
 2. **No Chunking**: Documents are organized into natural sections, not artificial chunks
@@ -976,12 +1073,12 @@ When you ask a question, the LLM **reasons through the tree** to find the most r
 
 ### PageIndex Tools
 
-| Tool | Description | Parameters |
-| --- | --- | --- |
-| `pageindex_build` | Builds a PageIndex tree from a document | `file_path: string, max_pages_per_node?: number` |
-| `pageindex_query` | Queries a PageIndex tree with reasoning | `index_id: string, query: string` |
-| `pageindex_list` | Lists all indexed documents | None |
-| `pageindex_delete` | Removes a document from the index | `index_id: string` |
+| Tool               | Description                             | Parameters                                       |
+| ------------------ | --------------------------------------- | ------------------------------------------------ |
+| `pageindex_build`  | Builds a PageIndex tree from a document | `file_path: string, max_pages_per_node?: number` |
+| `pageindex_query`  | Queries a PageIndex tree with reasoning | `index_id: string, query: string`                |
+| `pageindex_list`   | Lists all indexed documents             | None                                             |
+| `pageindex_delete` | Removes a document from the index       | `index_id: string`                               |
 
 ### Local-First Implementation
 
@@ -999,13 +1096,13 @@ Unlike the original PageIndex (which uses OpenAI), ChatDock’s implementation u
 
 ### Supported Document Types
 
-| Type | Extension | Method |
-| --- | --- | --- |
-| PDF | `.pdf` | Text extraction via `pdf-parse` |
-| Markdown | `.md` | Native heading-based parsing |
-| Word | `.docx` | Conversion via `mammoth` |
-| Plain Text | `.txt` | Line-based sectioning |
-| HTML | `.html` | DOM-based section extraction |
+| Type       | Extension | Method                          |
+| ---------- | --------- | ------------------------------- |
+| PDF        | `.pdf`    | Text extraction via `pdf-parse` |
+| Markdown   | `.md`     | Native heading-based parsing    |
+| Word       | `.docx`   | Conversion via `mammoth`        |
+| Plain Text | `.txt`    | Line-based sectioning           |
+| HTML       | `.html`   | DOM-based section extraction    |
 
 ### Example Usage
 
@@ -1063,23 +1160,23 @@ PageIndex trees are stored in `~/ChatDock/PageIndex/`:
 
 ### Performance Considerations
 
-| Metric | Value | Notes |
-| --- | --- | --- |
-| Index Build Time | 30-60 sec per 50 pages | Depends on model speed |
-| Query Time | 2-5 seconds | Tree traversal + reasoning |
-| Storage | ~5KB per 100 pages | JSON only, no embeddings |
-| RAM Usage | +0 MB | No vector DB in memory |
+| Metric           | Value                  | Notes                      |
+| ---------------- | ---------------------- | -------------------------- |
+| Index Build Time | 30-60 sec per 50 pages | Depends on model speed     |
+| Query Time       | 2-5 seconds            | Tree traversal + reasoning |
+| Storage          | ~5KB per 100 pages     | JSON only, no embeddings   |
+| RAM Usage        | +0 MB                  | No vector DB in memory     |
 
 ### Comparison: PageIndex vs Vector RAG
 
-| Aspect | Vector RAG | PageIndex |
-| --- | --- | --- |
-| Retrieval Method | Semantic similarity | LLM reasoning |
-| Storage | Large embeddings | Lightweight JSON |
-| Accuracy | Good for fuzzy matches | Better for precise queries |
-| Explainability | “Black box” similarity | Full reasoning trace |
-| Dependencies | Vector DB (Chroma, etc.) | None |
-| RAM for 8GB laptop | May struggle | ✅ Optimized |
+| Aspect             | Vector RAG               | PageIndex                  |
+| ------------------ | ------------------------ | -------------------------- |
+| Retrieval Method   | Semantic similarity      | LLM reasoning              |
+| Storage            | Large embeddings         | Lightweight JSON           |
+| Accuracy           | Good for fuzzy matches   | Better for precise queries |
+| Explainability     | “Black box” similarity   | Full reasoning trace       |
+| Dependencies       | Vector DB (Chroma, etc.) | None                       |
+| RAM for 8GB laptop | May struggle             | ✅ Optimized               |
 
 ---
 
@@ -1090,6 +1187,7 @@ ChatDock implements **Prompt Caching** to dramatically reduce latency and improv
 ### What is Prompt Caching?
 
 When you interact with an LLM, a significant portion of the prompt remains constant:
+
 - System prompt
 - Tool definitions
 - Loaded skills
@@ -1126,14 +1224,14 @@ Second Request (Cache Hit):
 
 ### Cache Layers
 
-| Layer | What’s Cached | TTL | Invalidation |
-| --- | --- | --- | --- |
-| **System Prompt** | Base identity + instructions | Session | On settings change |
-| **Tool Definitions** | All tool schemas | Session | On tool add/remove |
-| **Skill Context** | Active skill instructions | Per-request | On skill change |
-| **File Content** | Parsed document text | 5 minutes | On file modification |
-| **PageIndex Trees** | Document tree structures | Persistent | On re-index |
-| **Conversation History** | Previous messages | Rolling N | Per-message |
+| Layer                    | What’s Cached                | TTL         | Invalidation         |
+| ------------------------ | ---------------------------- | ----------- | -------------------- |
+| **System Prompt**        | Base identity + instructions | Session     | On settings change   |
+| **Tool Definitions**     | All tool schemas             | Session     | On tool add/remove   |
+| **Skill Context**        | Active skill instructions    | Per-request | On skill change      |
+| **File Content**         | Parsed document text         | 5 minutes   | On file modification |
+| **PageIndex Trees**      | Document tree structures     | Persistent  | On re-index          |
+| **Conversation History** | Previous messages            | Rolling N   | Per-message          |
 
 ### Cache Configuration
 
@@ -1144,7 +1242,7 @@ Second Request (Cache Hit):
     "enabled": true,
     "systemPromptCache": true,
     "toolDefinitionCache": true,
-    "fileContentCacheTTL": 300,      // 5 minutes
+    "fileContentCacheTTL": 300, // 5 minutes
     "maxCacheSize": "100MB",
     "persistAcrossSessions": false
   }
@@ -1155,21 +1253,21 @@ Second Request (Cache Hit):
 
 In addition to prompt caching, tool outputs are also cached:
 
-| Cache Type | TTL | Storage |
-| --- | --- | --- |
-| File Content | 30 seconds | In-memory |
+| Cache Type         | TTL        | Storage   |
+| ------------------ | ---------- | --------- |
+| File Content       | 30 seconds | In-memory |
 | Directory Listings | 60 seconds | In-memory |
-| Web Search Results | 5 minutes | In-memory |
-| Git Status | 10 seconds | In-memory |
+| Web Search Results | 5 minutes  | In-memory |
+| Git Status         | 10 seconds | In-memory |
 
 ### Performance Impact
 
-| Metric | Without Caching | With Caching | Improvement |
-| --- | --- | --- | --- |
-| First Response | 2.5s | 2.5s | - |
-| Subsequent Responses | 2.5s | 0.3-0.5s | **5-8x faster** |
-| Token Processing | 100% | 10-15% | **85% reduction** |
-| Memory Usage | Low | +50MB | Trade-off |
+| Metric               | Without Caching | With Caching | Improvement       |
+| -------------------- | --------------- | ------------ | ----------------- |
+| First Response       | 2.5s            | 2.5s         | -                 |
+| Subsequent Responses | 2.5s            | 0.3-0.5s     | **5-8x faster**   |
+| Token Processing     | 100%            | 10-15%       | **85% reduction** |
+| Memory Usage         | Low             | +50MB        | Trade-off         |
 
 ### Cache Invalidation
 
@@ -1215,7 +1313,7 @@ function getCachedPrompt(key) {
 function setCachedPrompt(key, value, ttlMs) {
   promptCache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs
+    expiresAt: Date.now() + ttlMs,
   });
 }
 ```
@@ -1254,12 +1352,12 @@ CHAT_SERVER_PORT=3001
 
 ### Recommended Models (8GB RAM)
 
-| Model | Size | Best For |
-| --- | --- | --- |
-| `llama3.1:8b-instruct-q4_K_M` | ~5GB | General tasks, coding |
-| `mistral-nemo:12b-instruct-q4_K_M` | ~7GB | Complex reasoning |
-| `gemma2:9b-instruct-q4_K_M` | ~6GB | Instruction following |
-| `qwen2.5:7b-instruct-q4_K_M` | ~5GB | Fast responses |
+| Model                              | Size | Best For              |
+| ---------------------------------- | ---- | --------------------- |
+| `llama3.1:8b-instruct-q4_K_M`      | ~5GB | General tasks, coding |
+| `mistral-nemo:12b-instruct-q4_K_M` | ~7GB | Complex reasoning     |
+| `gemma2:9b-instruct-q4_K_M`        | ~6GB | Instruction following |
+| `qwen2.5:7b-instruct-q4_K_M`       | ~5GB | Fast responses        |
 
 ---
 
@@ -1269,12 +1367,12 @@ CHAT_SERVER_PORT=3001
 
 ChatDock uses a **tiered permission system**:
 
-| Level | Actions | Confirmation Required |
-| --- | --- | --- |
-| **Read** | `read_file`, `list_directory`, `grep_search` | No |
-| **Write** | `write_file`, `edit_file` | Preview shown |
-| **Execute** | `run_command` | Command shown |
-| **Destructive** | `rm`, `git push --force` | Explicit “CONFIRM” |
+| Level           | Actions                                      | Confirmation Required |
+| --------------- | -------------------------------------------- | --------------------- |
+| **Read**        | `read_file`, `list_directory`, `grep_search` | No                    |
+| **Write**       | `write_file`, `edit_file`                    | Preview shown         |
+| **Execute**     | `run_command`                                | Command shown         |
+| **Destructive** | `rm`, `git push --force`                     | Explicit “CONFIRM”    |
 
 ### Sandbox Considerations
 
@@ -1366,4 +1464,4 @@ tail -f ~/.ollama/logs/server.log
 
 ---
 
-*This documentation is auto-generated and may be updated as ChatDock evolves.*
+_This documentation is auto-generated and may be updated as ChatDock evolves._
