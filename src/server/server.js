@@ -1,16 +1,18 @@
-// server.js (CommonJS)
+// server.js - Simple Ollama Chat Server
 const http = require("node:http");
 const express = require("express");
 const cors = require("cors");
 const fs = require("node:fs");
-const path = require("node:path");
-const { execSync } = require("node:child_process");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { loadSettings } = require("./utils/settings-store");
 
-const { port: PORT, host: HOST, userDataPath: USER_DATA, lastModelPath: LAST_MODEL_PATH } =
-  getServerConfig();
+const {
+  port: PORT,
+  host: HOST,
+  userDataPath: USER_DATA,
+  lastModelPath: LAST_MODEL_PATH,
+} = getServerConfig();
 
 const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 
@@ -34,17 +36,7 @@ function saveLastModel(name) {
   }
 }
 
-// The detectLatestLocalModel function has been removed as per the patch request.
-
-/* ===== Ollama model helpers ===== */
-const PULLING_MODELS = new Set();
-/* ================================= */
-
-// Load system prompt from Brain via PromptBuilder
-const { PromptBuilder } = require("./orchestrator/prompt-builder");
-const promptBuilder = new PromptBuilder();
-const SYSTEM_PROMPT = promptBuilder.build();
-console.log("[server] Loaded system prompt from Brain");
+const DEFAULT_SYSTEM_PROMPT = "You are a helpful AI assistant.";
 
 const app = express();
 app.use(cors());
@@ -59,6 +51,7 @@ app.get("/health", async (_req, res) => {
     res.json({ server: true, ollama: false });
   }
 });
+
 app.get("/models", async (_req, res) => {
   const lastModel = loadLastModel();
   try {
@@ -67,7 +60,6 @@ app.get("/models", async (_req, res) => {
       return res.json({
         models: [],
         online: false,
-        pulling: [...PULLING_MODELS],
         lastModel,
         error: `Upstream error: ${upstream.status} ${upstream.statusText}`,
       });
@@ -76,12 +68,11 @@ app.get("/models", async (_req, res) => {
     const models = Array.isArray(data.models)
       ? data.models.map((m) => m.name).filter(Boolean)
       : [];
-    res.json({ models, online: true, pulling: [...PULLING_MODELS], lastModel });
+    res.json({ models, online: true, lastModel });
   } catch (err) {
     res.json({
       models: [],
       online: false,
-      pulling: [...PULLING_MODELS],
       lastModel,
       error: err?.message || String(err),
     });
@@ -104,6 +95,7 @@ app.post("/chat", async (req, res) => {
     const requestedModel = req.body?.model ? String(req.body.model) : "";
     const lastModel = loadLastModel();
     let availableModels = [];
+
     if (!requestedModel && !lastModel) {
       try {
         const upstreamTags = await fetch(`${OLLAMA_BASE}/api/tags`, {
@@ -128,8 +120,7 @@ app.post("/chat", async (req, res) => {
 
     if (!chosenModel) {
       return res.status(400).json({
-        error:
-          "No model available. Install a model with Ollama and try again.",
+        error: "No model available. Install a model with Ollama and try again.",
         availableModels,
       });
     }
@@ -139,17 +130,18 @@ app.post("/chat", async (req, res) => {
     } else if (!lastModel && chosenModel) {
       saveLastModel(chosenModel);
     }
+
     const settings = loadSettings(process.env.USER_DATA_PATH || __dirname);
-    const systemPrompt = settings.systemPrompt || SYSTEM_PROMPT;
-    const temperature = typeof settings.temperature === "number" ? settings.temperature : 0.7;
+    const systemPrompt = settings.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+    const temperature =
+      typeof settings.temperature === "number" ? settings.temperature : 0.7;
+
     const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
       body: JSON.stringify({
         model: chosenModel,
         stream: true,
         messages: [
-          ...(systemPrompt
-            ? [{ role: "system", content: systemPrompt }]
-            : []),
+          ...(systemPrompt ? [{ role: "system", content: systemPrompt }] : []),
           { role: "user", content: userMsg },
         ],
         options: { temperature },
@@ -157,18 +149,21 @@ app.post("/chat", async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
+
     if (!upstream.ok || !upstream.body) {
       res
         .status(502)
         .end(`Upstream error: ${upstream.status} ${upstream.statusText}`);
       return;
     }
+
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
 
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let leftover = "";
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -176,6 +171,7 @@ app.post("/chat", async (req, res) => {
       const combined = leftover + chunk;
       const lines = combined.split(/\r?\n/);
       leftover = lines.pop() || "";
+
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
@@ -184,20 +180,22 @@ app.post("/chat", async (req, res) => {
         } catch {}
       }
     }
+
     if (leftover.trim()) {
       try {
         const evt = JSON.parse(leftover);
         if (evt?.message?.content) res.write(evt.message.content);
       } catch {}
     }
+
     res.end();
   } catch (err) {
     res.status(500).end("Server error: " + (err?.message || String(err)));
   }
 });
 
+/* Start server */
 (() => {
-  // No auto-default model: we persist last user choice and use it when a request omits `model`.
   const server = http.createServer(app);
 
   server.on("error", (err) => {
@@ -214,7 +212,7 @@ app.post("/chat", async (req, res) => {
       console.log(`[server] last chosen model: ${last}`);
     } else {
       console.log(
-        "[server] no last model chosen; requests must include a `model` field",
+        "[server] no last model chosen; requests must include a 'model' field",
       );
     }
   });

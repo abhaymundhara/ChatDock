@@ -5,7 +5,7 @@
 [![Platform](https://img.shields.io/badge/platform-%20Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/vakovalskii/LocalDesk)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**An intelligent agentic AI desktop assistant powered by local LLMs. ChatDock uses Ollama models with a sophisticated 5-phase agentic loop to understand, plan, and execute complex tasks autonomously through its extensive tool ecosystem.**
+**A simple, local AI chat desktop assistant powered by Ollama. ChatDock provides a clean interface to chat with local LLMs on your machine.**
 
 </div>
 
@@ -13,13 +13,10 @@
 
 ### Core Capabilities
 
-- **5-Phase Agentic Loop**: ANALYZE → PLAN → EXECUTE → OBSERVE → RESPOND cycle for intelligent task handling
-- **52+ Integrated Tools**: File operations, Git integration, shell commands, web search, code execution, and more
-- **4 Specialized Skills**: Code Navigator, File Editor, Git Expert, Research Assistant
-- **Persistent Memory System**: Remembers user preferences, conversation history, and learns from interactions
-- **URL Auto-Fetch**: Automatically detects, fetches, and comprehensively summarizes web content
-- **Smart Planning**: Automatically creates task breakdowns for complex requests
-- **Action-First Behavior**: Executes commands immediately without unnecessary conversation
+- **Local LLM Chat**: Simple streaming chat interface with Ollama models
+- **Model Selection**: Easy model picker for switching between installed Ollama models
+- **Customizable Settings**: Adjust system prompt and temperature settings
+- **Privacy First**: 100% local inference with no cloud dependency
 
 ### User Interface
 
@@ -32,8 +29,8 @@
 ### Privacy & Control
 
 - 100% local inference (no cloud dependency)
-- Persistent memory stored locally at `~/ChatDock/Memory/`
 - All data remains on your machine
+- No tracking or analytics
 
 ---
 

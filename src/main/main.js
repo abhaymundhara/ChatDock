@@ -118,13 +118,10 @@ function startServer({
   const resolvedAppPath =
     app && typeof app.getAppPath === "function" ? app.getAppPath() : appPath;
 
-  // Use orchestrator server for full agentic capabilities (45+ tools)
-  const serverPath = path.join(
-    resolvedAppPath,
-    "src/server/server-orchestrator.js",
-  );
+  // Use simplified server for basic chat functionality
+  const serverPath = path.join(resolvedAppPath, "src/server/server.js");
 
-  console.log("[main] Starting orchestrator server with agentic tools...");
+  console.log("[main] Starting chat server...");
   serverProcess = fork(serverPath, [], { env, stdio: "inherit" });
 
   serverProcess.on("error", (err) => {
