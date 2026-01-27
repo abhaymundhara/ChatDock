@@ -70,10 +70,10 @@ jobs:
         run: |
           node -c src/server/server.js
           node -c src/server/tools/registry.js
-          node -c src/server/tools/embeddings.js
           node -c src/server/utils/llm-cache.js
           node -c src/server/utils/server-config.js
           node -c src/server/utils/settings-store.js
+          node -c src/server/utils/settings.js
 
       - name: Validate preload and renderer
         run: |
@@ -142,8 +142,8 @@ jobs:
           echo "Checking for syntax errors..."
           node -c src/server/server.js
           node -c src/server/tools/registry.js
-          node -c src/server/tools/embeddings.js
           node -c src/server/utils/llm-cache.js
+          node -c src/server/utils/server-config.js
           echo "Core modules valid!"
 
       - name: Run core tests
