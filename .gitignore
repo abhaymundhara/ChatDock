@@ -39,5 +39,5 @@ Documentation.MD
 .bun/
 
 # User-specific memory (auto-created on first run)
-Memory/
+memory/
 docs/

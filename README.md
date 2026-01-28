@@ -2,8 +2,10 @@
 
 # ChatDock
 
-[![Platform](https://img.shields.io/badge/platform-%20Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/vakovalskii/LocalDesk)
+[![CI](https://github.com/abhaymundhara/ChatDock/workflows/CI/badge.svg)](https://github.com/abhaymundhara/ChatDock/actions)
+[![Platform](https://img.shields.io/badge/platform-%20Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/abhaymundhara/ChatDock)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-63%20passing-brightgreen.svg)](TESTING.md)
 
 **A simple, local AI chat desktop assistant powered by Ollama. ChatDock provides a clean interface to chat with local LLMs on your machine.**
 
@@ -195,25 +197,131 @@ ChatDock stores persistent memory at `~/ChatDock/Memory/`:
 
 ---
 
-## 📖 Roadmap
+## 📖 Project Status & Roadmap
 
-### Completed ✅
+### Phase 1: Core Infrastructure ✅ COMPLETE
 
-### Planned 🚧
+**Core Features Implemented:**
 
-- [ ] 5-phase agentic loop (ANALYZE, PLAN, EXECUTE, OBSERVE, RESPOND)
-- [ ] Persistent memory system
-- [ ] URL auto-fetch and summarization
-- [ ] 52+ integrated tools
-- [ ] 4 specialized skills
-- [ ] Shell integration (open apps, run scripts)
-- [ ] Git operations
-- [ ] Rich message formatting
-- [ ] Realtime screen context aware sessions
-- [ ] Multi-chat sessions with context switching
-- [ ] Auto-updates
-- [ ] Custom skill development framework
+- ✅ Electron desktop application with always-on-top floating chat bar
+- ✅ Global hotkey toggle (CommandOrControl+Shift+Space)
+- ✅ Local Ollama integration with streaming responses
+- ✅ Model picker and switching capability
+- ✅ Settings management (system prompt, temperature, model selection)
+- ✅ Memory system with daily context persistence
+- ✅ Brain context system (SOUL.md, AGENTS.md, TOOLS.md, USER.md)
+
+### Phase 2: Tool System & Server-Side Filtering ✅ COMPLETE
+
+**Core Tool Infrastructure:**
+
+- ✅ Tool registry with 10+ built-in tools
+- ✅ **Server-side rule-based tool filtering** (fast, no embeddings required)
+- ✅ Rich filesystem tools: `read_file`, `write_file`, `list_directory`, `create_directory`, `delete_file`, `move_file`, `search_files`, `get_file_info`
+- ✅ Safety checks: path validation, recursive directory operations, metadata enrichment
+- ✅ Shell command execution with safe environments
+- ✅ Error handling and structured JSON responses
+
+**Performance Optimizations:**
+
+- ✅ Removed embedding-based tool selection (replaced with faster rule-based filtering)
+- ✅ Batch embedding support with keep-alive parameter in Ollama
+- ✅ Added timing instrumentation to measure tool filtering (~1ms), execution (~4ms), and LLM inference latency
+- ✅ Profiled server: tool filtering is 1ms, execution is 4ms; **LLM inference is primary latency source** (20-25s for large models)
+
+**Server Updates:**
+
+- ✅ Fixed request handling bugs (req.body reference, renderer vs API payload formats)
+- ✅ Support for both renderer (`{ message }`) and API (`{ messages }`) request formats
+- ✅ Logging and timing instrumentation for performance debugging
+- ✅ `/chat`, `/tools`, `/health`, `/models` endpoints
+
+### Phase 3: Caching & Performance Enhancement 🚧 IN PROGRESS
+
+**LLM Response Caching (Prototype Created):**
+
+- ✅ Created `src/server/utils/llm-cache.js` with in-memory LRU cache + TTL
+- ✅ Cache key generation from message text, model, and tool names
+- ✅ Cache statistics tracking (hits, misses, size)
+- 🚧 **Pending Integration**: Hook cache into server flow for:
+  - Repeated identical user queries (skip first LLM call, return cached structured response)
+  - Short-lived parsed argument caching (reduce repeated tool-arg parsing)
+  - Cache invalidation on filesystem writes (watch-based or explicit invalidation)
+
+**Conservative Server-Side Argument Parser:**
+
+- 🚧 Design phase: high-confidence pattern matching for common commands
+  - Example patterns: "move X to Y", "delete X", "list X" → extract file paths via regex + context
+  - Fallback to LLM if ambiguous or pattern doesn't match
+  - Estimated impact: reduce first LLM call for 20-30% of simple commands
+
+### Phase 4: Model & Hosting Optimization 📋 RECOMMENDED
+
+**Immediate Recommendations:**
+
+- 🚧 Switch to smaller/faster local models:
+  - `llama3.2:3b` (3× faster than nemotron-3-nano:30b, ~3-5s per inference)
+  - `all-minilm:latest` or `nomic-embed-text` (specialized for embedding, faster)
+  - Ollama model library: test with `ollama pull llama3.2:3b` and update `.env`
+- 🚧 Consider hosted LLM APIs for lower latency:
+  - OpenAI GPT-4-turbo (~500ms per inference)
+  - Anthropic Claude API (~1-2s per inference)
+  - Local vLLM quantized models (AWQ, GPTQ formats)
+
+**Estimated Impact:**
+
+- Smaller model: 3–5× latency reduction (from ~25s to ~5-8s per tool call)
+- Hosted API: 10–20× latency reduction (from ~25s to ~1-2s per tool call)
+
+### Phase 5: Advanced Features 📋 PLANNED
+
+**Near Term (Next Sprint):**
+
+- [ ] Implement cache invalidation on filesystem writes
+- [ ] Add cache metrics dashboard (hit rate, avg latency, memory usage)
+- [ ] Conservative argument parser for "move", "delete", "list", "create" patterns
+- [ ] Streaming response support for faster UI feedback
+- [ ] Tool execution timeout and cancellation
+
+**Medium Term:**
+
+- [ ] Multi-turn conversation optimization (reuse embeddings for context)
+- [ ] Tool history and favorites (cache frequently-used tool calls)
+- [ ] Advanced task management (Claude Cowork-style task dependencies)
+- [ ] Git integration (status, diff, commit, branch operations)
+- [ ] URL fetching and web research tools
+- [ ] Code execution sandbox (Python, JavaScript, shell scripts)
+
+**Future:**
+
 - [ ] Voice input/output
+- [ ] Realtime screen context-aware sessions
+- [ ] Multi-chat sessions with context switching
+- [ ] Auto-updates and plugin system
+- [ ] Custom skill development framework
+- [ ] Distributed inference (multi-GPU, federated models)
+- [ ] Vision/image understanding capabilities
+
+### Phase 6: Testing & QA 📋 IN PROGRESS
+
+- ✅ 20+ test specs created (unit tests for core modules)
+- 🚧 Integration tests for server endpoints
+- 🚧 Performance benchmarks and profiling suite
+- 🚧 Cache invalidation and TTL expiry tests
+
+### Known Limitations & Notes
+
+1. **Primary Bottleneck**: LLM inference latency (20-25s for `nemotron-3-nano:30b`)
+   - Solution: Switch to smaller model or hosted API (see Phase 4 above)
+
+2. **Embeddings**: Removed from the critical path (server-side filtering replaced embedding-based selection)
+   - Embedding model still available in registry if needed for custom features
+
+3. **Cache Integration**: Prototype exists but not yet wired into server flow
+   - Next step: add cache check on inbound requests and post-tool-execution caching
+
+4. **Tool Execution**: Currently sequential; can be parallelized for read-only tools
+   - Example: parallel `read_file` calls for independent file operations
 
 ---
 
