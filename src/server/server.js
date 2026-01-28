@@ -13,6 +13,7 @@ const {
   initializeToolEmbeddings,
   filterToolsForMessage,
 } = require("./tools/registry");
+const { processLLMMessage } = require("./utils/tool-call-fixer");
 
 const {
   port: PORT,
@@ -88,7 +89,7 @@ function loadBrainContext() {
       process.env.CHATDOCK_APP_PATH || path.join(__dirname, "../..");
     const brainPath = path.join(appPath, "brain");
 
-    const files = ["SOUL.md"];
+    const files = ["SOUL.md", "TOOLS.md"];
     const context = [];
 
     for (const file of files) {
@@ -107,7 +108,7 @@ function loadBrainContext() {
 }
 
 const BRAIN_CONTEXT = loadBrainContext();
-console.log("[server] Loaded brain context (SOUL.md)");
+console.log("[server] Loaded brain context (SOUL.md, TOOLS.md)");
 console.log(`[server] Loaded ${tools.length} tools`);
 
 // Initialize tool embeddings at startup
@@ -305,13 +306,16 @@ app.post("/chat", async (req, res) => {
       }
 
       const data = await upstream.json();
-      const message = data?.message;
+      const rawMessage = data?.message;
       console.log(`[server] LLM inference took ${Date.now() - llmStartTime}ms`);
 
-      if (!message) {
+      if (!rawMessage) {
         res.status(502).end("Invalid response from Ollama");
         return;
       }
+
+      // Fix and validate tool calls (handles Qwen and other models)
+      const message = processLLMMessage(rawMessage);
 
       // Check if model wants to use tools
       if (message.tool_calls && message.tool_calls.length > 0) {
@@ -363,6 +367,20 @@ app.post("/chat", async (req, res) => {
 
       // No tool calls - we have the final response
       finalResponse = message.content || "";
+
+      // Debug: Check if response looks broken
+      if (
+        finalResponse.includes("function signatures") ||
+        finalResponse.includes("XML tags") ||
+        finalResponse.length > 5000
+      ) {
+        console.error(
+          "[server] LLM returned broken/garbage response, using fallback",
+        );
+        finalResponse =
+          "I encountered an error processing your request. Please try again or rephrase your question.";
+      }
+
       history.push({ role: "assistant", content: finalResponse });
       break;
     }

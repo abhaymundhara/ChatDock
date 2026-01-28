@@ -1,24 +1,98 @@
 // Tool Registry for ChatDock
-// Defines available tools in OpenAI/Ollama format
+// Auto-loads tools from plugins directory
 
 const fs = require("node:fs");
 const path = require("node:path");
-const os = require("node:os");
-const { exec } = require("node:child_process");
-const { promisify } = require("node:util");
-const execAsync = promisify(exec);
 
-// Resolve paths relative to user's home directory
-function resolvePath(inputPath) {
-  if (path.isAbsolute(inputPath)) {
-    return inputPath; // Already absolute
+/**
+ * Recursively scan a directory for tool plugin files
+ * @param {string} dir - Directory to scan
+ * @returns {string[]} Array of absolute file paths
+ */
+function scanPlugins(dir) {
+  const files = [];
+
+  if (!fs.existsSync(dir)) {
+    return files;
   }
-  if (inputPath.startsWith("~")) {
-    return path.join(os.homedir(), inputPath.slice(1)); // Expand ~
+
+  const items = fs.readdirSync(dir);
+
+  for (const item of items) {
+    const fullPath = path.join(dir, item);
+    const stat = fs.statSync(fullPath);
+
+    if (stat.isDirectory()) {
+      // Recursively scan subdirectories
+      files.push(...scanPlugins(fullPath));
+    } else if (
+      item.endsWith(".js") &&
+      !["utils.js", "TEMPLATE.js", "EXAMPLE.js"].includes(item)
+    ) {
+      // Only include .js files, excluding utility and example files
+      files.push(fullPath);
+    }
   }
-  // Relative path → resolve against home directory
-  return path.join(os.homedir(), inputPath);
+
+  return files;
 }
+
+/**
+ * Load all tool plugins from the plugins directory
+ * @returns {object} Object with tools array and toolExecutors map
+ */
+function loadTools() {
+  const pluginsDir = path.join(__dirname, "plugins");
+  const pluginFiles = scanPlugins(pluginsDir);
+
+  const tools = [];
+  const toolExecutors = {};
+
+  console.log(`[tools] Loading plugins from ${pluginsDir}`);
+
+  for (const pluginFile of pluginFiles) {
+    try {
+      const plugin = require(pluginFile);
+
+      // Validate plugin structure
+      if (!plugin.definition || !plugin.execute) {
+        console.warn(
+          `[tools] Skipping ${path.basename(pluginFile)}: missing definition or execute`,
+        );
+        continue;
+      }
+
+      if (!plugin.definition.function || !plugin.definition.function.name) {
+        console.warn(
+          `[tools] Skipping ${path.basename(pluginFile)}: invalid definition structure`,
+        );
+        continue;
+      }
+
+      const toolName = plugin.definition.function.name;
+
+      // Add to tools array and executors map
+      tools.push(plugin.definition);
+      toolExecutors[toolName] = plugin.execute;
+
+      console.log(
+        `[tools] ✓ Loaded: ${toolName} (${path.basename(pluginFile)})`,
+      );
+    } catch (error) {
+      console.error(
+        `[tools] Error loading ${path.basename(pluginFile)}:`,
+        error.message,
+      );
+    }
+  }
+
+  console.log(`[tools] Successfully loaded ${tools.length} tools`);
+
+  return { tools, toolExecutors };
+}
+
+// Load all tools at startup
+const { tools, toolExecutors } = loadTools();
 
 /**
  * Check if tool_search is available
@@ -141,566 +215,6 @@ function filterToolsForMessage(message) {
   );
   return filtered;
 }
-
-// Tool definitions
-const tools = [
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description:
-        "Read and retrieve the contents of a text or binary file from the filesystem",
-      parameters: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "The absolute or relative path to the file to read",
-          },
-          encoding: {
-            type: "string",
-            description:
-              "File encoding: 'utf8' for text files, 'base64' for binary files (default: utf8)",
-          },
-        },
-        required: ["file_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description:
-        "Write, create, or save content to a file at the specified path",
-      parameters: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "The path where the file should be written",
-          },
-          content: {
-            type: "string",
-            description: "The content to write to the file",
-          },
-          create_dirs: {
-            type: "boolean",
-            description:
-              "Create parent directories if they don't exist (default: true)",
-          },
-        },
-        required: ["file_path", "content"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "list_directory",
-      description:
-        "List, show, or display files and directories in a given path with details",
-      parameters: {
-        type: "object",
-        properties: {
-          dir_path: {
-            type: "string",
-            description: "The directory path to list contents from",
-          },
-          recursive: {
-            type: "boolean",
-            description: "List subdirectories recursively (default: false)",
-          },
-        },
-        required: ["dir_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "execute_shell",
-      description:
-        "Execute a shell command and return the output. Use with caution.",
-      parameters: {
-        type: "object",
-        properties: {
-          command: {
-            type: "string",
-            description: "The shell command to execute",
-          },
-        },
-        required: ["command"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_current_time",
-      description: "Get the current date and time",
-      parameters: {
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_directory",
-      description: "Create a directory at the specified path",
-      parameters: {
-        type: "object",
-        properties: {
-          dir_path: {
-            type: "string",
-            description: "The directory path to create",
-          },
-          recursive: {
-            type: "boolean",
-            description:
-              "Create parent directories if they don't exist (default: true)",
-          },
-        },
-        required: ["dir_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "delete_file",
-      description:
-        "Delete, remove, or erase a file or directory from the filesystem",
-      parameters: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "The path to the file or directory to delete",
-          },
-          recursive: {
-            type: "boolean",
-            description:
-              "Allow deletion of non-empty directories (default: false)",
-          },
-        },
-        required: ["file_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "move_file",
-      description:
-        "Move, rename, or relocate a file or directory from one path to another",
-      parameters: {
-        type: "object",
-        properties: {
-          source: {
-            type: "string",
-            description: "The source path",
-          },
-          destination: {
-            type: "string",
-            description: "The destination path",
-          },
-        },
-        required: ["source", "destination"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_file_info",
-      description:
-        "Get detailed metadata about a file or directory (size, type, permissions, timestamps)",
-      parameters: {
-        type: "object",
-        properties: {
-          file_path: {
-            type: "string",
-            description: "The path to the file or directory",
-          },
-        },
-        required: ["file_path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "search_files",
-      description:
-        "Search, find, or locate files by name pattern (wildcards supported) in a directory tree",
-      parameters: {
-        type: "object",
-        properties: {
-          dir_path: {
-            type: "string",
-            description: "Directory to search in",
-          },
-          pattern: {
-            type: "string",
-            description: "Filename pattern to search for (supports wildcards)",
-          },
-          recursive: {
-            type: "boolean",
-            description: "Search recursively in subdirectories (default: true)",
-          },
-        },
-        required: ["dir_path", "pattern"],
-      },
-    },
-  },
-];
-
-// Tool execution functions
-const toolExecutors = {
-  async read_file(args) {
-    try {
-      const filePath = resolvePath(args.file_path);
-      const encoding = args.encoding || "utf8";
-
-      if (!fs.existsSync(filePath)) {
-        return { success: false, error: `File not found: ${filePath}` };
-      }
-
-      const stats = fs.statSync(filePath);
-      if (stats.isDirectory()) {
-        return { success: false, error: `Path is a directory: ${filePath}` };
-      }
-
-      if (encoding === "base64") {
-        const buffer = fs.readFileSync(filePath);
-        return {
-          success: true,
-          content: buffer.toString("base64"),
-          encoding: "base64",
-          size: stats.size,
-        };
-      } else {
-        const content = fs.readFileSync(filePath, "utf-8");
-        return {
-          success: true,
-          content,
-          encoding: "utf8",
-          size: stats.size,
-        };
-      }
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async write_file(args) {
-    try {
-      const { file_path, content, create_dirs = true } = args;
-      const resolvedPath = resolvePath(file_path);
-      const dir = path.dirname(resolvedPath);
-
-      if (create_dirs && !fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      fs.writeFileSync(resolvedPath, content, "utf-8");
-      const stats = fs.statSync(resolvedPath);
-
-      return {
-        success: true,
-        path: resolvedPath,
-        size: stats.size,
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async list_directory(args) {
-    try {
-      const dirPath = resolvePath(args.dir_path);
-      const recursive = args.recursive || false;
-
-      if (!fs.existsSync(dirPath)) {
-        return { success: false, error: `Directory not found: ${dirPath}` };
-      }
-
-      const stats = fs.statSync(dirPath);
-      if (!stats.isDirectory()) {
-        return { success: false, error: `Path is not a directory: ${dirPath}` };
-      }
-
-      function getFileType(stats) {
-        if (stats.isDirectory()) return "directory";
-        if (stats.isFile()) return "file";
-        if (stats.isSymbolicLink()) return "symlink";
-        if (stats.isSocket()) return "socket";
-        return "unknown";
-      }
-
-      function listRecursive(dir, basePath = "") {
-        const entries = [];
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-          const fullPath = path.join(dir, item);
-          const relativePath = basePath ? path.join(basePath, item) : item;
-          const stats = fs.statSync(fullPath);
-
-          entries.push({
-            name: relativePath,
-            type: getFileType(stats),
-            size: stats.size,
-            modified: stats.mtime.toISOString(),
-          });
-
-          if (recursive && stats.isDirectory()) {
-            entries.push(...listRecursive(fullPath, relativePath));
-          }
-        }
-
-        return entries;
-      }
-
-      const entries = listRecursive(dirPath);
-      return { success: true, path: dirPath, entries };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async execute_shell(args) {
-    try {
-      const { stdout, stderr } = await execAsync(args.command, {
-        timeout: 30000, // 30 second timeout
-        maxBuffer: 1024 * 1024, // 1MB max output
-      });
-      return {
-        success: true,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        stdout: error.stdout || "",
-        stderr: error.stderr || "",
-      };
-    }
-  },
-
-  async get_current_time() {
-    const now = new Date();
-    return {
-      success: true,
-      timestamp: now.toISOString(),
-      formatted: now.toLocaleString(),
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    };
-  },
-
-  async search_files(args) {
-    try {
-      const { dir_path, pattern, recursive = true } = args;
-      const resolvedDir = resolvePath(dir_path);
-
-      if (!fs.existsSync(resolvedDir)) {
-        return { success: false, error: `Directory not found: ${resolvedDir}` };
-      }
-
-      const stats = fs.statSync(resolvedDir);
-      if (!stats.isDirectory()) {
-        return {
-          success: false,
-          error: `Path is not a directory: ${resolvedDir}`,
-        };
-      }
-
-      const regex = new RegExp(
-        pattern.replace(/\*/g, ".*").replace(/\?/g, "."),
-        "i",
-      );
-
-      function getFileType(stats) {
-        if (stats.isDirectory()) return "directory";
-        if (stats.isFile()) return "file";
-        if (stats.isSymbolicLink()) return "symlink";
-        return "unknown";
-      }
-
-      function searchRecursive(dir, basePath = "") {
-        const results = [];
-        const items = fs.readdirSync(dir);
-
-        for (const item of items) {
-          const fullPath = path.join(dir, item);
-          const relativePath = basePath ? path.join(basePath, item) : item;
-          const stats = fs.statSync(fullPath);
-
-          if (regex.test(item)) {
-            results.push({
-              path: relativePath,
-              type: getFileType(stats),
-              size: stats.size,
-            });
-          }
-
-          if (recursive && stats.isDirectory()) {
-            results.push(...searchRecursive(fullPath, relativePath));
-          }
-        }
-
-        return results;
-      }
-
-      const matches = searchRecursive(resolvedDir);
-      return {
-        success: true,
-        search_path: resolvedDir,
-        pattern,
-        matches,
-        count: matches.length,
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async create_directory(args) {
-    try {
-      const { dir_path, recursive = true } = args;
-      const resolvedPath = resolvePath(dir_path);
-
-      if (fs.existsSync(resolvedPath)) {
-        return {
-          success: false,
-          error: `Path already exists: ${resolvedPath}`,
-        };
-      }
-
-      fs.mkdirSync(resolvedPath, { recursive });
-
-      return {
-        success: true,
-        path: resolvedPath,
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async delete_file(args) {
-    try {
-      const { file_path, recursive = false } = args;
-      const resolvedPath = resolvePath(file_path);
-
-      if (!fs.existsSync(resolvedPath)) {
-        return { success: false, error: `Path not found: ${resolvedPath}` };
-      }
-
-      const stats = fs.statSync(resolvedPath);
-
-      // If it's a directory and not recursive, check if it's empty
-      if (stats.isDirectory() && !recursive) {
-        const contents = fs.readdirSync(resolvedPath);
-        if (contents.length > 0) {
-          return {
-            success: false,
-            error:
-              "Directory is not empty. Use recursive: true to delete non-empty directories.",
-          };
-        }
-      }
-
-      if (stats.isDirectory()) {
-        fs.rmSync(resolvedPath, { recursive: true, force: true });
-      } else {
-        fs.unlinkSync(resolvedPath);
-      }
-
-      return {
-        success: true,
-        path: resolvedPath,
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async move_file(args) {
-    try {
-      const { source, destination } = args;
-      const sourcePath = resolvePath(source);
-      const destPath = resolvePath(destination);
-
-      if (!fs.existsSync(sourcePath)) {
-        return { success: false, error: `Source not found: ${sourcePath}` };
-      }
-
-      fs.renameSync(sourcePath, destPath);
-
-      return {
-        success: true,
-        source: sourcePath,
-        destination: destPath,
-      };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-
-  async get_file_info(args) {
-    try {
-      const { file_path } = args;
-      const resolvedPath = resolvePath(file_path);
-
-      if (!fs.existsSync(resolvedPath)) {
-        return { success: false, error: `Path not found: ${resolvedPath}` };
-      }
-
-      const stats = fs.statSync(resolvedPath);
-
-      function getFileType(stats) {
-        if (stats.isDirectory()) return "directory";
-        if (stats.isFile()) return "file";
-        if (stats.isSymbolicLink()) return "symlink";
-        if (stats.isSocket()) return "socket";
-        if (stats.isBlockDevice()) return "block";
-        if (stats.isCharacterDevice()) return "character";
-        return "unknown";
-      }
-
-      const info = {
-        success: true,
-        path: resolvedPath,
-        type: getFileType(stats),
-        size: stats.size,
-        created: stats.birthtime.toISOString(),
-        modified: stats.mtime.toISOString(),
-        accessed: stats.atime.toISOString(),
-        permissions: (stats.mode & parseInt("777", 8)).toString(8),
-        readable: true, // Node.js doesn't provide direct check
-        writable: true,
-        executable: !!(stats.mode & parseInt("111", 8)),
-      };
-
-      if (stats.isDirectory()) {
-        const contents = fs.readdirSync(resolvedPath);
-        info.item_count = contents.length;
-      }
-
-      return info;
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  },
-};
 
 /**
  * Initialize tool system (no longer needs embedding computation)
