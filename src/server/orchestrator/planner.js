@@ -89,6 +89,44 @@ class Planner {
 
     return null;
   }
+
+  /**
+   * Lightweight LLM gate to classify if a request needs tools
+   * @param {string} userText
+   * @param {Array<{role: string, content: string}>} conversationHistory
+   * @param {string} model
+   * @returns {Promise<boolean>} true if complex (needs tools)
+   */
+  async isComplexQuestion(userText, conversationHistory, model) {
+    if (!userText || !userText.trim()) return true;
+
+    const recentTurns = conversationHistory.slice(-3);
+    const context = recentTurns
+      .map((m) => `${m.role}: ${m.content}`)
+      .join("\n");
+
+    const prompt = `${context}\n\nUser Query: ${userText}\n\nDetermine if this user query is a complex task or a simple question.\n\n**Complex task** (answer \"yes\"): Requires tools, code execution, file operations, multi-step planning, or creating/modifying content\n**Simple question** (answer \"no\"): Can be answered directly with knowledge or conversation history, no action needed\n\nAnswer only \"yes\" or \"no\".`;
+
+    try {
+      const resp = await this.ollamaClient.chat(
+        [
+          {
+            role: "system",
+            content: "You are a strict classifier. Reply only yes or no.",
+          },
+          { role: "user", content: prompt },
+        ],
+        { model, temperature: 0.0 },
+      );
+
+      const normalized = (resp?.content || "").trim().toLowerCase();
+      if (normalized.includes("yes")) return true;
+      if (normalized.includes("no")) return false;
+      return true;
+    } catch {
+      return true;
+    }
+  }
   /**
    * Check if user approved the todo plan in their last message
    * @param {string} userText - The user's latest message
@@ -142,17 +180,16 @@ class Planner {
     if (/\b(open|read|show|display|cat|view)\s+\S+/i.test(lowerText)) {
       return { type: "file_read", filename: this.extractFilename(text) };
     }
-    if (/\b(create|make|write|touch)\s+(a\s+)?file/i.test(lowerText)) {
+    if (/\b(create|make|write|touch)\b/i.test(lowerText)) {
       const filename =
         text.match(
           /(?:called|named)\s+([a-zA-Z0-9_\-.]+(?:\.[a-zA-Z0-9]+)?)/i,
-        )?.[1] ||
-        text.match(
-          /(?:file|txt|md|json|csv)\s+([a-zA-Z0-9_\-.]+(?:\.[a-zA-Z0-9]+)?)/i,
-        )?.[1] ||
-        this.extractFilename(text);
-      const location = lowerText.match(/(?:on|in|at)\s+(\w+)/i)?.[1];
-      return { type: "file_create", filename, location };
+        )?.[1] || this.extractFilename(text);
+      const hasFileKeyword = /\bfile\b/i.test(lowerText);
+      if (filename || hasFileKeyword) {
+        const location = lowerText.match(/(?:on|in|at)\s+(\w+)/i)?.[1];
+        return { type: "file_create", filename, location };
+      }
     }
     if (/\b(delete|remove|rm)\s+\S+/i.test(lowerText)) {
       return { type: "file_delete", filename: this.extractFilename(text) };
@@ -200,7 +237,7 @@ class Planner {
                 {
                   id: 1,
                   description: `Find and read ${action.filename}`,
-                  status: "in-progress",
+                  status: "in_progress",
                 },
               ],
             }),
@@ -240,7 +277,7 @@ class Planner {
                   {
                     id: 1,
                     description: `Create file ${action.filename}${locationText}`,
-                    status: "in-progress",
+                    status: "in_progress",
                   },
                 ],
               }),
@@ -261,7 +298,7 @@ class Planner {
                 {
                   id: 1,
                   description: `Execute: ${action.command}`,
-                  status: "in-progress",
+                  status: "in_progress",
                 },
               ],
             }),
@@ -281,7 +318,7 @@ class Planner {
                 {
                   id: 1,
                   description: `Search for: ${action.query}`,
-                  status: "in-progress",
+                  status: "in_progress",
                 },
               ],
             }),
@@ -349,11 +386,6 @@ class Planner {
       throw new Error("Conversation history is required");
     }
 
-    // Ensure tools are loaded
-    console.log("[planner] Loading tools...");
-    await this.ensureTools();
-    console.log(`[planner] Tools loaded: ${this.tools.length}`);
-
     // Get lastPlan from options (passed from server)
     const lastPlan = options.lastPlan || null;
 
@@ -364,6 +396,33 @@ class Planner {
       .reverse()
       .find((m) => m.role === "user");
     const userText = latestUserMsg?.content || "";
+
+    const isComplex = await this.isComplexQuestion(
+      userText,
+      conversationHistory,
+      model,
+    );
+
+    if (!isComplex) {
+      const response = await this.ollamaClient.chat(
+        [
+          { role: "system", content: "You are a helpful assistant." },
+          ...conversationHistory,
+        ],
+        { model, temperature: 0.7 },
+      );
+
+      return {
+        type: "conversation",
+        content: response.content || "",
+        tool_calls: [],
+      };
+    }
+
+    // Ensure tools are loaded
+    console.log("[planner] Loading tools...");
+    await this.ensureTools();
+    console.log(`[planner] Tools loaded: ${this.tools.length}`);
 
     // **PHASE 2: Check if user approved a previous todo plan**
     if (this.hasUserApproval(userText, lastPlan)) {

@@ -191,7 +191,8 @@ class OllamaClient {
     };
 
     const requestJson = JSON.stringify(requestBody);
-    console.log("[ollama-client] Request size:", requestJson.length, "bytes");
+    const requestBuffer = Buffer.from(requestJson, "utf8");
+    console.log("[ollama-client] Request size:", requestBuffer.length, "bytes");
 
     // Persist request for debugging/fallback
     const fs = require("fs");
@@ -208,8 +209,8 @@ class OllamaClient {
     }
 
     // Use http module instead of fetch for large requests
-    const http = require("http");
     const url = new URL(`${this.baseUrl}/api/chat`);
+    const http = url.protocol === "https:" ? require("https") : require("http");
 
     return new Promise((resolve, reject) => {
       const req = http.request(
@@ -219,8 +220,8 @@ class OllamaClient {
           path: url.pathname,
           method: "POST",
           headers: {
-            "Content-Type": "application/json",
-            "Content-Length": Buffer.byteLength(requestJson),
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Length": requestBuffer.length,
           },
         },
         (res) => {
@@ -300,8 +301,7 @@ class OllamaClient {
         reject(new Error(`Request failed: ${err.message}`));
       });
 
-      req.write(requestJson);
-      req.end();
+      req.end(requestBuffer);
     });
   }
 }
