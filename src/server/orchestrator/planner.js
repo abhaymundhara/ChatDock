@@ -7,6 +7,10 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { OllamaClient } = require("./ollama-client");
+const {
+  buildDecomposePrompt,
+  buildAssignPrompt,
+} = require("./workforce-prompts");
 
 /**
  * Load the Planner system prompt from PLANNER.md
@@ -380,6 +384,128 @@ class Planner {
   }
 
   /**
+   * Parse XML task list into array of task strings
+   * @param {string} xml
+   * @returns {string[]}
+   */
+  parseTasksFromXml(xml) {
+    if (!xml || typeof xml !== "string") return [];
+    const tasks = [];
+    const taskRegex = /<task>([\s\S]*?)<\/task>/gi;
+    let match;
+    while ((match = taskRegex.exec(xml)) !== null) {
+      const task = match[1].trim();
+      if (task) tasks.push(task);
+    }
+    return tasks;
+  }
+
+  /**
+   * Extract JSON object from text (best-effort)
+   * @param {string} text
+   * @returns {Object|null}
+   */
+  extractJson(text) {
+    if (!text || typeof text !== "string") return null;
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+      try {
+        return JSON.parse(match[0]);
+      } catch (innerError) {
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Decompose or rewrite task into XML list
+   * @param {string} userText
+   * @param {string} model
+   * @returns {Promise<string[]>}
+   */
+  async decomposeTasks(userText, model) {
+    const workers =
+      "file: File operations (read, write, search)\n" +
+      "shell: Shell commands and git\n" +
+      "web: Web search and fetch\n" +
+      "code: Code execution or analysis";
+
+    const prompt = buildDecomposePrompt({
+      content: userText,
+      workers,
+    });
+
+    const response = await this.ollamaClient.chat(
+      [
+        {
+          role: "system",
+          content: "You are a strict planner. Return only XML tasks.",
+        },
+        { role: "user", content: prompt },
+      ],
+      { model, temperature: 0.2 },
+    );
+
+    let tasks = this.parseTasksFromXml(response?.content || "");
+    if (tasks.length === 0) {
+      const retry = await this.ollamaClient.chat(
+        [
+          {
+            role: "system",
+            content:
+              "Return ONLY <tasks><task>...</task></tasks> with at least one <task>.",
+          },
+          { role: "user", content: prompt },
+        ],
+        { model, temperature: 0.0 },
+      );
+      tasks = this.parseTasksFromXml(retry?.content || "");
+    }
+
+    return tasks;
+  }
+
+  /**
+   * Assign tasks to worker types
+   * @param {string[]} tasks
+   * @param {string} model
+   * @returns {Promise<Array<{task_id:string, assignee_id:string, dependencies:string[]}>>}
+   */
+  async assignTasks(tasks, model) {
+    const workers =
+      "file: File operations (read, write, search)\n" +
+      "shell: Shell commands and git\n" +
+      "web: Web search and fetch\n" +
+      "code: Code execution or analysis";
+
+    const tasksInfo = tasks
+      .map((task, index) => `task_${index + 1}: ${task}`)
+      .join("\n");
+
+    const prompt = buildAssignPrompt({
+      tasks: tasksInfo,
+      workers,
+    });
+
+    const response = await this.ollamaClient.chat(
+      [
+        {
+          role: "system",
+          content: "You are a strict JSON generator. Return only JSON.",
+        },
+        { role: "user", content: prompt },
+      ],
+      { model, temperature: 0.0 },
+    );
+
+    const parsed = this.extractJson(response?.content || "");
+    return parsed?.assignments || [];
+  }
+
+  /**
    * Analyze user request and generate task plan
    * @param {Array<{role: string, content: string}>} conversationHistory - Full conversation history
    * @param {Object} options
@@ -538,6 +664,48 @@ class Planner {
       } else {
         console.log("[planner] No synthesis possible, falling back to LLM");
       }
+    }
+
+    // Eigent-style decomposition + assignment (LLM)
+    try {
+      const decomposedTasks = await this.decomposeTasks(userText, model);
+      if (decomposedTasks.length > 0) {
+        const assignments = await this.assignTasks(decomposedTasks, model);
+        if (assignments.length > 0) {
+          const assignmentMap = new Map(
+            assignments.map((item) => [item.task_id, item]),
+          );
+
+          const todos = decomposedTasks.map((task, index) => {
+            const taskId = `task_${index + 1}`;
+            const assignment = assignmentMap.get(taskId) || {};
+            return {
+              id: String(index + 1),
+              description: task,
+              status: index === 0 ? "in_progress" : "pending",
+              assigned_agent: assignment.assignee_id || "file",
+              depends_on: assignment.dependencies || [],
+            };
+          });
+
+          return {
+            type: "task",
+            content: "Here's the plan. Please review and approve:",
+            tool_calls: [
+              {
+                id: "planner_todo_decompose",
+                type: "function",
+                function: {
+                  name: "todo_write",
+                  arguments: JSON.stringify({ todos }),
+                },
+              },
+            ],
+          };
+        }
+      }
+    } catch (error) {
+      console.warn("[planner] Decompose/assign failed:", error.message);
     }
 
     // Add current date to system prompt for date awareness
