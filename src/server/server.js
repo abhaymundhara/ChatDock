@@ -483,17 +483,21 @@ Your Goal: Provide a friendly, natural response to the user.
 
     // If there are task results (Phase 2 - execution complete), include them
     if (result.results && result.results.length > 0) {
-      // Build detailed summary from specialist responses
-      const taskDetails = result.results
-        .map((r, i) => {
-          const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
-          const content = r.result?.content || r.message || "";
-          const error = r.error ? `\nError: ${r.error}` : "";
-          return `**Task ${i + 1}** [${status}]\n${content}${error}`;
-        })
-        .join("\n\n");
-
-      responseText = `${taskDetails}`;
+      if (result.content && result.content !== "Executing the approved plan...") {
+         // Use the conversational synthesis provided by Orchestrator
+         responseText = result.content;
+      } else {
+         // Fallback: detailed summary from specialist responses
+         const taskDetails = result.results
+           .map((r, i) => {
+             const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
+             const content = r.result?.content || r.message || "";
+             const error = r.error ? `\nError: ${r.error}` : "";
+             return `**Task ${i + 1}** [${status}]\n${content}${error}`;
+           })
+           .join("\n\n");
+         responseText = `${taskDetails}`;
+      }
 
       // Clear last plan after execution
       lastPlanBySession.delete(sessionId);

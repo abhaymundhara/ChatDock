@@ -153,9 +153,27 @@ class Orchestrator {
       
       const parallelResult = await this.taskExecutor.executeParallel(tasks, options);
       results = parallelResult.results || parallelResult;
+
+      // Log completion
+      const successCount = results.filter((r) => r.success).length;
+      results.forEach((result, i) => {
+        logger.logTaskComplete(
+          result.task_id || `task_${i}`,
+          result.success,
+          { agent_type: result.agent_type, duration_ms: result.duration_ms }
+        );
+      });
+
+      // Generate conversational summary
+      const finalResponse = await this.generateConversationalResponse("execution_results", {
+        summary: `Executed ${results.length} tasks from approved plan.`,
+        results,
+        userMessage: options.userMessage
+      }, options.userMessage || "", options);
       
       return { 
           results, 
+          content: finalResponse,
           summary: `Executed ${results.length} tasks from approved plan.` 
       };
   }
