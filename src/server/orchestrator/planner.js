@@ -491,11 +491,10 @@ class Planner {
       }
     }
 
-    const isComplex = await this.isComplexQuestion(
-      userText,
-      conversationHistory,
-      model,
-    );
+    const isToolRequest = this.needsToolUse(userText);
+    const isComplex = isToolRequest
+      ? true
+      : await this.isComplexQuestion(userText, conversationHistory, model);
 
     if (!isComplex) {
       const response = await this.ollamaClient.chat(
