@@ -223,6 +223,14 @@ class Planner {
    */
   synthesizeToolCalls(action) {
     const toolCalls = [];
+    const formatLocation = (location) => {
+      if (!location) return "in the current working directory";
+      const normalized = location.toLowerCase();
+      if (normalized === "desktop") return "on the Desktop";
+      if (normalized === "documents") return "in Documents";
+      if (normalized === "downloads") return "in Downloads";
+      return `in the ${location}`;
+    };
 
     switch (action.type) {
       case "file_read":
@@ -236,8 +244,9 @@ class Planner {
               todos: [
                 {
                   id: 1,
-                  description: `Find and read ${action.filename}`,
+                  description: `Find and read ${action.filename} using a file read operation`,
                   status: "in_progress",
+                  assigned_agent: "file",
                 },
               ],
             }),
@@ -266,7 +275,7 @@ class Planner {
             },
           });
         } else {
-          const locationText = action.location ? ` in ${action.location}` : "";
+          const locationText = formatLocation(action.location);
           toolCalls.push({
             id: "planner_todo_1",
             type: "function",
@@ -276,8 +285,9 @@ class Planner {
                 todos: [
                   {
                     id: 1,
-                    description: `Create file ${action.filename}${locationText}`,
+                    description: `Create an empty file named ${action.filename} ${locationText} using a shell command or write operation`,
                     status: "in_progress",
+                    assigned_agent: "file",
                   },
                 ],
               }),
@@ -299,6 +309,7 @@ class Planner {
                   id: 1,
                   description: `Execute: ${action.command}`,
                   status: "in_progress",
+                  assigned_agent: "shell",
                 },
               ],
             }),
@@ -319,6 +330,7 @@ class Planner {
                   id: 1,
                   description: `Search for: ${action.query}`,
                   status: "in_progress",
+                  assigned_agent: "web",
                 },
               ],
             }),
@@ -396,33 +408,6 @@ class Planner {
       .reverse()
       .find((m) => m.role === "user");
     const userText = latestUserMsg?.content || "";
-
-    const isComplex = await this.isComplexQuestion(
-      userText,
-      conversationHistory,
-      model,
-    );
-
-    if (!isComplex) {
-      const response = await this.ollamaClient.chat(
-        [
-          { role: "system", content: "You are a helpful assistant." },
-          ...conversationHistory,
-        ],
-        { model, temperature: 0.7 },
-      );
-
-      return {
-        type: "conversation",
-        content: response.content || "",
-        tool_calls: [],
-      };
-    }
-
-    // Ensure tools are loaded
-    console.log("[planner] Loading tools...");
-    await this.ensureTools();
-    console.log(`[planner] Tools loaded: ${this.tools.length}`);
 
     // **PHASE 2: Check if user approved a previous todo plan**
     if (this.hasUserApproval(userText, lastPlan)) {
@@ -505,6 +490,33 @@ class Planner {
         };
       }
     }
+
+    const isComplex = await this.isComplexQuestion(
+      userText,
+      conversationHistory,
+      model,
+    );
+
+    if (!isComplex) {
+      const response = await this.ollamaClient.chat(
+        [
+          { role: "system", content: "You are a helpful assistant." },
+          ...conversationHistory,
+        ],
+        { model, temperature: 0.7 },
+      );
+
+      return {
+        type: "conversation",
+        content: response.content || "",
+        tool_calls: [],
+      };
+    }
+
+    // Ensure tools are loaded
+    console.log("[planner] Loading tools...");
+    await this.ensureTools();
+    console.log(`[planner] Tools loaded: ${this.tools.length}`);
 
     // **PHASE 1: Detect and synthesize todo (without task)**
     if (this.needsToolUse(userText)) {
