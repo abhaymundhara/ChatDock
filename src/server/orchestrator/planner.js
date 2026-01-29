@@ -65,6 +65,235 @@ class Planner {
   }
 
   /**
+   * Check if text contains action keywords that need tools
+   */
+  needsToolUse(text) {
+    const actionKeywords =
+      /\b(open|read|create|write|search|find|list|run|execute|install|make|build|test|debug|fix|update|delete|remove|move|copy|rename|show|display|get|fetch|load|save|export|import|download|upload|clone|pull|push|commit|checkout|branch|merge|deploy|start|stop|restart|kill)\b/i;
+    return actionKeywords.test(text);
+  }
+
+  /**
+   * Extract filename from common patterns
+   */
+  extractFilename(text) {
+    // Match: "open X", "read X", "show X", etc.
+    const actionMatch = text.match(
+      /\b(?:open|read|show|display|get|cat|view)\s+([a-zA-Z0-9_\-./]+\.?[a-zA-Z0-9]+)/i,
+    );
+    if (actionMatch) return actionMatch[1];
+
+    // Match file extensions
+    const extMatch = text.match(/([a-zA-Z0-9_\-./]+\.[a-zA-Z0-9]+)/);
+    if (extMatch) return extMatch[1];
+
+    return null;
+  }
+  /**
+   * Check if user approved the todo plan in their last message
+   * @param {string} userText - The user's latest message
+   * @param {Object} lastPlan - The previous plan object (if any)
+   */
+  hasUserApproval(userText, lastPlan) {
+    if (!lastPlan || !lastPlan.tool_calls) return false;
+
+    // Check if last plan had a todo (without task) - indicating Phase 1
+    const hadTodo = lastPlan.tool_calls.some(
+      (tc) => tc.function?.name === "todo",
+    );
+    const hadTask = lastPlan.tool_calls.some(
+      (tc) => tc.function?.name === "task",
+    );
+
+    if (!hadTodo || hadTask) return false; // Not Phase 1
+
+    // Check if user's message is approval
+    const approvalKeywords =
+      /\b(yes|ok|okay|sure|proceed|go ahead|approved?|confirm|looks? good|correct|right|do it|execute|run it|start)\b/i;
+    return approvalKeywords.test(userText);
+  }
+
+  /**
+   * Extract todo details from last plan
+   * @param {Object} lastPlan - The previous plan object
+   */
+  getPreviousTodo(lastPlan) {
+    if (!lastPlan || !lastPlan.tool_calls) return null;
+
+    const todoCall = lastPlan.tool_calls.find(
+      (tc) => tc.function?.name === "todo",
+    );
+    if (!todoCall) return null;
+
+    try {
+      const args = JSON.parse(todoCall.function.arguments);
+      return args.todos;
+    } catch (e) {
+      return null;
+    }
+  }
+  /**
+   * Detect what kind of action is being requested
+   */
+  detectActionType(text) {
+    const lowerText = text.toLowerCase();
+
+    // File operations
+    if (/\b(open|read|show|display|cat|view)\s+\S+/i.test(lowerText)) {
+      return { type: "file_read", filename: this.extractFilename(text) };
+    }
+    if (/\b(create|make|write|touch)\s+(a\s+)?file/i.test(lowerText)) {
+      const filename =
+        text.match(
+          /(?:called|named)\s+([a-zA-Z0-9_\-.]+(?:\.[a-zA-Z0-9]+)?)/i,
+        )?.[1] ||
+        text.match(
+          /(?:file|txt|md|json|csv)\s+([a-zA-Z0-9_\-.]+(?:\.[a-zA-Z0-9]+)?)/i,
+        )?.[1] ||
+        this.extractFilename(text);
+      const location = lowerText.match(/(?:on|in|at)\s+(\w+)/i)?.[1];
+      return { type: "file_create", filename, location };
+    }
+    if (/\b(delete|remove|rm)\s+\S+/i.test(lowerText)) {
+      return { type: "file_delete", filename: this.extractFilename(text) };
+    }
+
+    // Shell operations
+    if (/\b(run|execute|launch|start)\s+\S+/i.test(lowerText)) {
+      return {
+        type: "shell_execute",
+        command: text.match(/(?:run|execute|launch|start)\s+(.+)/i)?.[1],
+      };
+    }
+    if (/\b(install|npm|pip|brew|apt)\b/i.test(lowerText)) {
+      return { type: "shell_install", command: text };
+    }
+
+    // Search operations
+    if (/\b(search|find|look for|locate)\s+\S+/i.test(lowerText)) {
+      return {
+        type: "search",
+        query: text.match(/(?:search|find|look for|locate)\s+(.+)/i)?.[1],
+      };
+    }
+
+    return { type: "unknown" };
+  }
+
+  /**
+   * Synthesize tool calls for common actions (bypasses LLM)
+   * Phase 1: Creates todo only
+   */
+  synthesizeToolCalls(action) {
+    const toolCalls = [];
+
+    switch (action.type) {
+      case "file_read":
+        if (!action.filename) break;
+        toolCalls.push({
+          id: "planner_todo_1",
+          type: "function",
+          function: {
+            name: "todo",
+            arguments: JSON.stringify({
+              todos: [
+                {
+                  id: 1,
+                  description: `Find and read ${action.filename}`,
+                  status: "in-progress",
+                },
+              ],
+            }),
+          },
+        });
+        // Phase 2 will add task after user approval
+        break;
+
+      case "file_create":
+        if (!action.filename) {
+          toolCalls.push({
+            id: "planner_clarify_1",
+            type: "function",
+            function: {
+              name: "ask_user_question",
+              arguments: JSON.stringify({
+                question: "What would you like to name the file?",
+                options: [
+                  {
+                    label: "Specify filename",
+                    description: "Enter the filename with extension",
+                    value: "specify",
+                  },
+                ],
+              }),
+            },
+          });
+        } else {
+          const locationText = action.location ? ` in ${action.location}` : "";
+          toolCalls.push({
+            id: "planner_todo_1",
+            type: "function",
+            function: {
+              name: "todo",
+              arguments: JSON.stringify({
+                todos: [
+                  {
+                    id: 1,
+                    description: `Create file ${action.filename}${locationText}`,
+                    status: "in-progress",
+                  },
+                ],
+              }),
+            },
+          });
+        }
+        break;
+
+      case "shell_execute":
+        if (!action.command) break;
+        toolCalls.push({
+          id: "planner_todo_1",
+          type: "function",
+          function: {
+            name: "todo",
+            arguments: JSON.stringify({
+              todos: [
+                {
+                  id: 1,
+                  description: `Execute: ${action.command}`,
+                  status: "in-progress",
+                },
+              ],
+            }),
+          },
+        });
+        break;
+
+      case "search":
+        if (!action.query) break;
+        toolCalls.push({
+          id: "planner_todo_1",
+          type: "function",
+          function: {
+            name: "todo",
+            arguments: JSON.stringify({
+              todos: [
+                {
+                  id: 1,
+                  description: `Search for: ${action.query}`,
+                  status: "in-progress",
+                },
+              ],
+            }),
+          },
+        });
+        break;
+    }
+
+    return toolCalls;
+  }
+
+  /**
    * Analyze user request and generate task plan
    * @param {Array<{role: string, content: string}>} conversationHistory - Full conversation history
    * @param {Object} options
@@ -83,27 +312,126 @@ class Planner {
       throw new Error("Conversation history is required");
     }
 
-    const userText = getLatestUserText(conversationHistory);
-
-    // Fast-path: if the latest user message clearly needs tools, synthesize tool calls
-    if (needsToolUse(userText)) {
-      const filename = extractFilename(userText);
-      if (filename) {
-        console.log(
-          "[planner] Fast-path: synthesizing tool calls for file request",
-        );
-        return {
-          type: "task",
-          content: "",
-          tool_calls: buildOpenFileToolCalls(filename),
-        };
-      }
-    }
-
     // Ensure tools are loaded
     console.log("[planner] Loading tools...");
     await this.ensureTools();
     console.log(`[planner] Tools loaded: ${this.tools.length}`);
+
+    // Get lastPlan from options (passed from server)
+    const lastPlan = options.lastPlan || null;
+
+    // **FAST-PATH: Pre-process common actions before LLM**
+    // Small models struggle with tool calling, so detect and synthesize for common patterns
+    const latestUserMsg = conversationHistory
+      .slice()
+      .reverse()
+      .find((m) => m.role === "user");
+    const userText = latestUserMsg?.content || "";
+
+    // **PHASE 2: Check if user approved a previous todo plan**
+    if (this.hasUserApproval(userText, lastPlan)) {
+      console.log("[planner] Phase 2: User approved todo, synthesizing task");
+      const todos = this.getPreviousTodo(lastPlan);
+
+      if (todos && todos.length > 0) {
+        const firstTodo = todos[0];
+        const description = firstTodo.description || "";
+
+        // Infer agent type and task from todo description
+        let agent_type = "file";
+        let context = "";
+
+        if (/\b(find|search|read|open|display)\b/i.test(description)) {
+          agent_type = "file";
+          const filename = description.match(
+            /(?:read|open|find)\s+([a-zA-Z0-9_\-.]+(?:\.[a-zA-Z0-9]+)?)/i,
+          )?.[1];
+          context = filename
+            ? `Use search_files to locate ${filename} if needed, then read_file to display contents.`
+            : "Use search_files to locate the file if needed, then read_file to display contents.";
+        } else if (/\b(create|write|make)\b/i.test(description)) {
+          agent_type = "file";
+          // Extract filename and location from description like "Create file abhay.txt in desktop"
+          // Try multiple patterns: "create file X", "create X.txt", "file X"
+          let filename =
+            description.match(
+              /(?:file|create)\s+(?:file\s+)?([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]+)/i,
+            )?.[1] ||
+            description.match(/\b([a-zA-Z0-9_\-.]+\.[a-zA-Z0-9]+)\b/i)?.[1];
+          const location = description.match(/(?:in|at|on)\s+(\w+)/i)?.[1];
+
+          if (!filename) filename = "newfile.txt";
+
+          let filePath = filename;
+          if (location) {
+            // Get actual home directory (don't use ~ as it won't be expanded)
+            const homeDir =
+              process.env.HOME || process.env.USERPROFILE || "/tmp";
+
+            // Map common locations to absolute paths
+            const locationMap = {
+              desktop: `${homeDir}/Desktop/`,
+              documents: `${homeDir}/Documents/`,
+              downloads: `${homeDir}/Downloads/`,
+              home: `${homeDir}/`,
+            };
+            const basePath =
+              locationMap[location.toLowerCase()] || `${homeDir}/${location}/`;
+            filePath = basePath + filename;
+          }
+
+          context = `Your task: Create the file ${filePath} with content.\n\nIMPORTANT: Use ONLY write_file tool. Do NOT use create_directory. The write_file tool will automatically create parent directories if needed.\n\nCall write_file with:\n- path: "${filePath}"\n- content: "File created by ChatDock\\n"\n\nDo this in ONE step. Do not create directories separately.`;
+        } else if (/\b(execute|run|install|command)\b/i.test(description)) {
+          agent_type = "shell";
+          context = "Execute the shell command safely and return output.";
+        } else if (/\b(search|web|fetch|url)\b/i.test(description)) {
+          agent_type = "web";
+          context = "Perform web search or fetch URL content.";
+        }
+
+        return {
+          type: "task",
+          content: "Executing the approved plan...",
+          tool_calls: [
+            {
+              id: "planner_task_approved",
+              type: "function",
+              function: {
+                name: "task",
+                arguments: JSON.stringify({
+                  agent_type,
+                  task_description: description,
+                  context,
+                }),
+              },
+            },
+          ],
+        };
+      }
+    }
+
+    // **PHASE 1: Detect and synthesize todo (without task)**
+    if (this.needsToolUse(userText)) {
+      const action = this.detectActionType(userText);
+      console.log(`[planner] Detected action type: ${action.type}`);
+
+      const synthesizedCalls = this.synthesizeToolCalls(action);
+      if (synthesizedCalls.length > 0) {
+        console.log(
+          `[planner] Phase 1: synthesized ${synthesizedCalls.length} tool calls (todo only)`,
+        );
+        return {
+          type:
+            synthesizedCalls[0].function.name === "ask_user_question"
+              ? "clarification"
+              : "task",
+          content: "Here's the plan. Please review and approve:",
+          tool_calls: synthesizedCalls,
+        };
+      } else {
+        console.log("[planner] No synthesis possible, falling back to LLM");
+      }
+    }
 
     // Add current date to system prompt for date awareness
     const currentDate = new Date().toISOString().split("T")[0];
@@ -146,60 +474,6 @@ class Planner {
     // Check if it's a pure conversation (no tool calls)
     if (!response.tool_calls || response.tool_calls.length === 0) {
       console.log("[planner] Analysis: Pure conversation (no tool calls)");
-
-      // Fallback: if user intent clearly needs tools, synthesize tool calls
-      if (needsToolUse(userText)) {
-        const filename = extractFilename(userText);
-        if (filename) {
-          console.log(
-            "[planner] Fallback: synthesizing tool calls for file request",
-          );
-          const tool_calls = buildOpenFileToolCalls(filename);
-          return {
-            type: "task",
-            content: "",
-            tool_calls,
-          };
-        }
-
-        // Ambiguous tool-needed request: ask a minimal clarification
-        console.log(
-          "[planner] Fallback: asking clarification for tool-needed request",
-        );
-        return {
-          type: "clarification",
-          content: "",
-          tool_calls: [
-            {
-              type: "function",
-              function: {
-                name: "ask_user_question",
-                arguments: JSON.stringify({
-                  question:
-                    "I need a bit more detail to proceed. What exactly should I do?",
-                  options: [
-                    {
-                      label: "Search",
-                      description: "Search for a file or text",
-                      value: "search",
-                    },
-                    {
-                      label: "Read file",
-                      description: "Open and read a file",
-                      value: "read_file",
-                    },
-                    {
-                      label: "Other",
-                      description: "Provide more details",
-                      value: "other",
-                    },
-                  ],
-                }),
-              },
-            },
-          ],
-        };
-      }
 
       // Pure conversational response
       return {
@@ -267,68 +541,6 @@ class Planner {
     // For now, the Planner will handle clarifications in its normal flow
     throw new Error("Clarification flow not yet implemented");
   }
-}
-
-function needsToolUse(text) {
-  if (!text) return false;
-  const lower = text.toLowerCase();
-  return (
-    /\b(open|read|write|search|find|list|delete|move|rename|create)\b/.test(
-      lower,
-    ) || /\.(txt|md|json|js|ts|py|csv|log)\b/.test(lower)
-  );
-}
-
-function extractFilename(text) {
-  if (!text) return "";
-  const match = text.match(/\b(?:open|read)\s+([^\s]+)\b/i);
-  if (match && match[1]) return match[1];
-  const extMatch = text.match(/\b[^\s]+\.(txt|md|json|js|ts|py|csv|log)\b/i);
-  return extMatch ? extMatch[0] : "";
-}
-
-function getLatestUserText(conversationHistory) {
-  const latestUser = conversationHistory
-    ?.slice()
-    .reverse()
-    .find((m) => m.role === "user");
-  return latestUser?.content || "";
-}
-
-function buildOpenFileToolCalls(filename) {
-  return [
-    {
-      type: "function",
-      function: {
-        name: "todo",
-        arguments: JSON.stringify({
-          todos: [
-            {
-              id: "1",
-              description: `Find ${filename} location`,
-              status: "in_progress",
-            },
-            {
-              id: "2",
-              description: "Read and display file contents",
-              status: "pending",
-            },
-          ],
-        }),
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "task",
-        arguments: JSON.stringify({
-          agent_type: "file",
-          task_description: `Find and read ${filename}`,
-          context: `Use search_files to locate ${filename} in the workspace, then use read_file to read and display its contents`,
-        }),
-      },
-    },
-  ];
 }
 
 module.exports = { Planner, loadPlannerPrompt };

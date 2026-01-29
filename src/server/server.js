@@ -22,6 +22,7 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 
 // Memory management
 const conversationHistory = new Map(); // sessionId -> messages array
+const lastPlanBySession = new Map(); // sessionId -> last plan (for Phase 2 detection)
 
 function getMemoryPath() {
   const appPath =
@@ -223,7 +224,10 @@ app.post("/chat/agent", async (req, res) => {
     logger.logRequest(userMsg, sessionId, chosenModel);
 
     // Step 1: Planner analyzes intent
-    logger.logPlanner("ANALYZE", { message_length: userMsg.length, history_length: history.length });
+    logger.logPlanner("ANALYZE", {
+      message_length: userMsg.length,
+      history_length: history.length,
+    });
     const plan = await planner.plan(history, { model: chosenModel });
     logger.logPlanner("ROUTE", {
       type: plan.type,
@@ -308,9 +312,15 @@ app.post("/chat", async (req, res) => {
     const planner = new Planner({ model: chosenModel });
     const orchestrator = new Orchestrator({ model: chosenModel });
 
+    // Get last plan for Phase 2 detection
+    const lastPlan = lastPlanBySession.get(sessionId) || null;
+
     // Planner analyzes and routes
-    logger.logPlanner("ANALYZE", { message_length: userMsg.length, history_length: history.length });
-    const plan = await planner.plan(history, { model: chosenModel });
+    logger.logPlanner("ANALYZE", {
+      message_length: userMsg.length,
+      history_length: history.length,
+    });
+    const plan = await planner.plan(history, { model: chosenModel, lastPlan });
     logger.logPlanner("ROUTE", {
       type: plan.type,
       has_tool_calls: !!(plan.tool_calls && plan.tool_calls.length > 0),
@@ -333,13 +343,48 @@ app.post("/chat", async (req, res) => {
     }
 
     // Handle normal responses
-    history.push({ role: "assistant", content: result.content });
-    appendToTodayLog(userMsg, result.content);
+    let responseText = result.content;
+
+    // If there are todos (Phase 1 - waiting for approval), format them into the response
+    if (result.todos && result.todos.length > 0) {
+      const todoList = result.todos
+        .map(
+          (todo, i) =>
+            `${i + 1}. ${todo.description || todo.content} [${todo.status}]`,
+        )
+        .join("\n");
+      responseText = `${result.content}\n\n**Todo List:**\n${todoList}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
+
+      // Store plan for Phase 2 detection (separate from conversation history to avoid breaking Ollama)
+      lastPlanBySession.set(sessionId, plan);
+    }
+
+    // If there are task results (Phase 2 - execution complete), include them
+    if (result.results && result.results.length > 0) {
+      // Build detailed summary from specialist responses
+      const taskDetails = result.results
+        .map((r, i) => {
+          const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
+          const content = r.result?.content || r.message || "";
+          const error = r.error ? `\nError: ${r.error}` : "";
+          return `**Task ${i + 1}** [${status}]\n${content}${error}`;
+        })
+        .join("\n\n");
+
+      responseText = `${taskDetails}`;
+
+      // Clear last plan after execution
+      lastPlanBySession.delete(sessionId);
+    }
+
+    // Save to history (DO NOT include tool_calls - it breaks Ollama JSON parsing)
+    history.push({ role: "assistant", content: responseText });
+    appendToTodayLog(userMsg, responseText);
 
     // Send as text for backward compatibility with UI
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
-    res.write(result.content);
+    res.write(responseText);
     res.end();
   } catch (err) {
     console.error("[chat] Error:", err);
