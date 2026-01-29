@@ -350,13 +350,13 @@ The Planner must output structured JSON for tasks:
 
 ---
 
-### Phase 3: First Specialist (File) (Days 9-11)
+### Phase 3: First Specialist (File) (Days 9-11) 🔄 IN PROGRESS
 
 **Goal:** Implement File Specialist with shell-based tools
 
 **Tasks:**
 
-1. Create `/src/server/orchestrator/specialists/file-specialist.js`
+1. ✅ Create `/src/server/orchestrator/specialists/file-specialist.js`
    - Load FILE_SPECIALIST.md
    - Fresh context only (no conversation history)
    - Tool execution wrapper
@@ -364,24 +364,26 @@ The Planner must output structured JSON for tasks:
    - **Validation:** write-file and move-file check tracker before executing
    - **Stateless:** Tracker resets between specialist invocations
 
-2. Convert file tools to shell-based
-   - Update search-files.js to use `find` command
-   - Update read-file.js to use `cat` command
-   - Update write-file.js to use shell redirection
-   - Update move-file.js to use `mv` command
+2. ✅ Convert file tools to shell-based (already done in Phase 2)
+   - search-files uses `find` command
+   - read-file uses `cat` command
+   - write-file uses shell redirection
+   - move-file uses `mv` command
 
-3. Add a open-file tool and a multi-file tool
+3. ✅ Add open-file tool and glob_search (multi-file) tool
+   - `open_file`: Opens file in system default application (cross-platform)
+   - `glob_search`: Search for multiple patterns in one call
 
-4. Integration test: "open willo.txt"
+4. ⏳ Integration test: "open willo.txt"
    - Planner breaks down into: search → open
    - Coordinator spawns File Specialist twice
    - Verify results aggregation
 
 **Success Criteria:**
 
-- File Specialist executes with fresh context
-- Shell-based file operations are 2-5x faster
-- End-to-end test passes (search → read workflow)
+- ✅ File Specialist executes with fresh context
+- ✅ Shell-based file operations are 2-5x faster
+- ⏳ End-to-end test passes (search → read workflow)
 
 ---
 

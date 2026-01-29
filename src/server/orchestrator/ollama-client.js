@@ -150,7 +150,7 @@ class OllamaClient {
             if (json.message?.content) {
               yield { content: json.message.content, done: json.done || false };
             }
-          } catch {}
+          } catch { }
         }
         break;
       }
@@ -166,7 +166,7 @@ class OllamaClient {
           if (json.message?.content) {
             yield { content: json.message.content, done: json.done || false };
           }
-        } catch {}
+        } catch { }
       }
     }
   }
@@ -195,7 +195,9 @@ class OllamaClient {
 
     // Persist request for debugging/fallback
     const fs = require("fs");
-    const requestPath = "/tmp/ollama-request.json";
+    const os = require("os");
+    const pathModule = require("path");
+    const requestPath = pathModule.join(os.tmpdir(), "ollama-request.json");
     try {
       fs.writeFileSync(requestPath, requestJson);
     } catch (err) {

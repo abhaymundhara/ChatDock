@@ -5,7 +5,90 @@
 
 const { exec } = require("child_process");
 const { promisify } = require("util");
+const fs = require("fs");
+const path = require("path");
 const execAsync = promisify(exec);
+
+// Get logs directory path
+const getLogsDir = () => {
+  const appPath = process.env.CHATDOCK_APP_PATH || path.join(__dirname, "../../../..");
+  return path.join(appPath, "logs");
+};
+
+// Ensure logs directory exists
+const ensureLogsDir = () => {
+  const logsDir = getLogsDir();
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  return logsDir;
+};
+
+// Generate log filename with timestamp
+const getLogFilename = () => {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g, "-");
+  return `command_${timestamp}.log`;
+};
+
+// Write command log to file
+const logCommand = (command, cwd, result, duration) => {
+  try {
+    const logsDir = ensureLogsDir();
+    const logFile = path.join(logsDir, getLogFilename());
+
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      command,
+      cwd: cwd || process.cwd(),
+      duration_ms: duration,
+      success: result.success,
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      error: result.error || null,
+      exit_code: result.code || (result.success ? 0 : 1),
+    };
+
+    const logContent = `# Command Execution Log
+Timestamp: ${logEntry.timestamp}
+Duration: ${logEntry.duration_ms}ms
+
+## Command
+\`\`\`
+${logEntry.command}
+\`\`\`
+
+## Working Directory
+${logEntry.cwd}
+
+## Result
+Success: ${logEntry.success}
+Exit Code: ${logEntry.exit_code}
+
+## STDOUT
+\`\`\`
+${logEntry.stdout || "(empty)"}
+\`\`\`
+
+## STDERR
+\`\`\`
+${logEntry.stderr || "(empty)"}
+\`\`\`
+
+${logEntry.error ? `## Error\n${logEntry.error}\n` : ""}
+---
+JSON: ${JSON.stringify(logEntry)}
+`;
+
+    fs.writeFileSync(logFile, logContent, "utf-8");
+    console.log(`[system] Command logged to: ${logFile}`);
+
+    return logFile;
+  } catch (error) {
+    console.warn("[system] Failed to write command log:", error.message);
+    return null;
+  }
+};
 
 // Tool definitions
 const tools = [
@@ -66,6 +149,9 @@ const tools = [
 // Tool executors
 const executors = {
   async execute_command({ command, cwd, timeout = 30000 }) {
+    const startTime = Date.now();
+    let result;
+
     try {
       const { stdout, stderr } = await execAsync(command, {
         cwd: cwd || process.cwd(),
@@ -73,13 +159,13 @@ const executors = {
         maxBuffer: 1024 * 1024 * 10, // 10MB
       });
 
-      return {
+      result = {
         success: true,
         stdout: stdout.trim(),
         stderr: stderr.trim(),
       };
     } catch (error) {
-      return {
+      result = {
         success: false,
         error: error.message,
         stdout: error.stdout?.trim() || "",
@@ -87,6 +173,15 @@ const executors = {
         code: error.code,
       };
     }
+
+    // Log the command execution
+    const duration = Date.now() - startTime;
+    const logFile = logCommand(command, cwd, result, duration);
+
+    // Add log file path to result
+    result.log_file = logFile;
+
+    return result;
   },
 
   async get_environment({ variable }) {

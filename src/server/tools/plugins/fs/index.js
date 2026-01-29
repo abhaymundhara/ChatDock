@@ -170,6 +170,45 @@ const tools = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "open_file",
+      description: "Open a file in the system default application",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Path to the file to open",
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "glob_search",
+      description: "Search for files matching multiple patterns in one call",
+      parameters: {
+        type: "object",
+        properties: {
+          directory: {
+            type: "string",
+            description: "Directory to search in",
+          },
+          patterns: {
+            type: "array",
+            items: { type: "string" },
+            description: "Array of file patterns to search for",
+          },
+        },
+        required: ["directory", "patterns"],
+      },
+    },
+  },
 ];
 
 // Tool executors
@@ -293,6 +332,61 @@ const executors = {
       );
       const files = stdout.trim().split("\n").filter(Boolean);
       return { success: true, files };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  async open_file({ path: filePath }) {
+    try {
+      const platform = process.platform;
+      let command;
+
+      if (platform === "win32") {
+        // Windows: use start command
+        command = `start "" ${JSON.stringify(filePath)}`;
+      } else if (platform === "darwin") {
+        // macOS: use open command
+        command = `open ${JSON.stringify(filePath)}`;
+      } else {
+        // Linux: use xdg-open
+        command = `xdg-open ${JSON.stringify(filePath)}`;
+      }
+
+      await execAsync(command);
+      return { success: true, path: filePath, opened: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  },
+
+  async glob_search({ directory, patterns }) {
+    try {
+      const allFiles = [];
+      const results = {};
+
+      for (const pattern of patterns) {
+        try {
+          const { stdout } = await execAsync(
+            `find ${JSON.stringify(directory)} -name ${JSON.stringify(pattern)}`,
+          );
+          const files = stdout.trim().split("\n").filter(Boolean);
+          results[pattern] = files;
+          allFiles.push(...files);
+        } catch {
+          results[pattern] = [];
+        }
+      }
+
+      // Remove duplicates
+      const uniqueFiles = [...new Set(allFiles)];
+
+      return {
+        success: true,
+        files: uniqueFiles,
+        by_pattern: results,
+        total: uniqueFiles.length,
+      };
     } catch (error) {
       return { success: false, error: error.message };
     }
