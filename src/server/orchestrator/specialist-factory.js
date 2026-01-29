@@ -1,6 +1,7 @@
 /**
  * Specialist Factory for ChatDock
  * Loads specialist prompts and spawns specialists with fresh context
+ * Uses dedicated classes for known specialists, falls back to generic for others
  * Based on Anthropic Cowork patterns
  */
 
@@ -9,8 +10,12 @@ const path = require("node:path");
 const { OllamaClient } = require("./ollama-client");
 const logger = require("../utils/logger");
 
+// Import dedicated specialists
+const { FileSpecialist } = require("./specialists/file-specialist");
+const { ConversationSpecialist } = require("./specialists/conversation-specialist");
+
 /**
- * Load specialist system prompt
+ * Load specialist system prompt (Generic Fallback)
  * @param {string} specialistName - conversation, file, shell, web, code
  * @returns {string}
  */
@@ -50,8 +55,6 @@ function loadSpecialistPrompt(specialistName) {
 async function getSpecialistTools(specialistName) {
   try {
     const registry = require("../tools/registry");
-
-    // Use plugin-based tool filtering
     return await registry.getToolsForSpecialist(specialistName);
   } catch (error) {
     console.warn(
@@ -67,8 +70,15 @@ class SpecialistFactory {
     this.ollamaClient = options.ollamaClient || new OllamaClient();
     this.model = options.model;
 
-    // Cache loaded prompts
+    // Cache loaded prompts (for generic specialists)
     this.prompts = new Map();
+
+    // Instantiate dedicated specialists (singleton-ish per factory)
+    this.specialists = {
+        file: new FileSpecialist(options),
+        conversation: new ConversationSpecialist(options)
+        // Add others as they are implemented
+    };
   }
 
   /**
@@ -93,8 +103,17 @@ class SpecialistFactory {
    * @returns {Promise<{success: boolean, result?: any, error?: string}>}
    */
   async spawnSpecialist(specialistName, task, options = {}) {
+    const start = Date.now();
+    
+    // Check for dedicated specialist class
+    if (this.specialists[specialistName]) {
+        logger.log("INFO", "SPECIALIST_FACTORY", `Delegating to dedicated ${specialistName} specialist`);
+        return await this.specialists[specialistName].execute(task, options);
+    }
+
+    // --- Fallback to Generic Logic ---
+    
     const model = options.model || this.model;
-    const startTime = Date.now();
 
     logger.logSpecialist(specialistName, task.id, "START", {
       title: task.title,
@@ -107,7 +126,12 @@ class SpecialistFactory {
       const systemPrompt = this.getPrompt(specialistName);
 
       // Build fresh context message
-      const taskMessage = `Task: ${task.title}\n\nDescription: ${task.description}`;
+      let taskMessage = `Task: ${task.title}\n\nDescription: ${task.description}`;
+
+      // Inject feedback from previous attempt if available
+      if (options.previousError) {
+        taskMessage += `\n\n[PREVIOUS ATTEMPT FAILED]\nThe previous attempt to complete this task failed with the following error:\n"${options.previousError}"\n\nPlease analyze this error, adjust your approach (e.g., use a different tool, check file existence first, or fix syntax), and try again.`;
+      }
 
       // Get specialist tools (async)
       const tools = await getSpecialistTools(specialistName);
@@ -127,10 +151,10 @@ class SpecialistFactory {
           temperature: 0.5,
         });
 
-        // Execute any tool calls
+        // Execute any tool calls (Generic Execution)
         if (response.tool_calls && response.tool_calls.length > 0) {
           const toolResults = await this.executeToolCalls(response.tool_calls);
-          const duration = Date.now() - startTime;
+          const duration = Date.now() - start;
 
           logger.logSpecialist(specialistName, task.id, "COMPLETE", {
             duration_ms: duration,
@@ -147,14 +171,14 @@ class SpecialistFactory {
           };
         }
       } else {
-        // Conversation specialist - no tools
+        // No tools
         response = await this.ollamaClient.chat(messages, {
           model,
           temperature: 0.7,
         });
       }
 
-      const duration = Date.now() - startTime;
+      const duration = Date.now() - start;
       logger.logSpecialist(specialistName, task.id, "COMPLETE", {
         duration_ms: duration,
         hasContent: !!response.content,
@@ -168,7 +192,7 @@ class SpecialistFactory {
         },
       };
     } catch (error) {
-      const duration = Date.now() - startTime;
+      const duration = Date.now() - start;
       logger.logSpecialist(specialistName, task.id, "FAIL", {
         duration_ms: duration,
         error: error.message,
@@ -182,14 +206,14 @@ class SpecialistFactory {
   }
 
   /**
-   * Execute tool calls from specialist
+   * Execute tool calls from specialist (Generic Fallback)
    * @param {Array} toolCalls
    * @returns {Promise<Array>}
    */
   async executeToolCalls(toolCalls) {
     const registry = require("../tools/registry");
     const results = [];
-    const toolContext = { readFiles: new Set() };
+    const toolContext = { readFiles: new Set() }; // Generic context
 
     for (const toolCall of toolCalls) {
       const toolName = toolCall.function?.name;
@@ -201,17 +225,8 @@ class SpecialistFactory {
       }
 
       try {
-        // Parse arguments if they're a string
         const args =
           typeof toolArgs === "string" ? JSON.parse(toolArgs) : toolArgs || {};
-
-        // Log tool call start with arguments
-        const cleanArgs = { ...args };
-        delete cleanArgs.__context;
-        logger.logTool(toolName, "CALL", {
-          arguments: cleanArgs,
-          arg_keys: Object.keys(cleanArgs),
-        });
 
         const toolStartTime = Date.now();
         const result = await registry.executeTool(toolName, {
@@ -220,15 +235,10 @@ class SpecialistFactory {
         });
         const toolDuration = Date.now() - toolStartTime;
 
-        // Log detailed tool execution
         logger.logToolExecution(toolName, args, result, toolDuration);
 
         results.push(result);
       } catch (error) {
-        logger.logTool(toolName, "FAIL", {
-          error: error.message,
-          stack: error.stack?.split("\n").slice(0, 3).join("\n"),
-        });
         results.push({ error: error.message });
       }
     }
@@ -236,52 +246,21 @@ class SpecialistFactory {
     return results;
   }
 
+  // ... (rest of class)
+  
   /**
    * Determine which specialist should handle a task based on description
-   * This is a fallback - normally the Planner determines this
    * @param {string} description
    * @returns {string}
    */
   static determineSpecialist(description) {
-    const lower = description.toLowerCase();
-
-    if (
-      lower.includes("file") ||
-      lower.includes("read") ||
-      lower.includes("write") ||
-      lower.includes("search")
-    ) {
-      return "file";
-    }
-
-    if (
-      lower.includes("shell") ||
-      lower.includes("command") ||
-      lower.includes("npm") ||
-      lower.includes("git")
-    ) {
-      return "shell";
-    }
-
-    if (
-      lower.includes("web") ||
-      lower.includes("search") ||
-      lower.includes("fetch") ||
-      lower.includes("url")
-    ) {
-      return "web";
-    }
-
-    if (
-      lower.includes("python") ||
-      lower.includes("javascript") ||
-      lower.includes("execute") ||
-      lower.includes("code")
-    ) {
-      return "code";
-    }
-
-    return "conversation";
+     // ... (static method)
+     const lower = description.toLowerCase();
+     if (lower.includes("file") || lower.includes("read") || lower.includes("write")) return "file";
+     if (lower.includes("shell") || lower.includes("command")) return "shell";
+     if (lower.includes("web") || lower.includes("search")) return "web";
+     if (lower.includes("code") || lower.includes("python")) return "code";
+     return "conversation";
   }
 }
 

@@ -48,9 +48,9 @@ const tools = [
   {
     type: "function",
     function: {
-      name: "todo",
+      name: "todo_write",
       description:
-        "Create or update todo progress tracking (TodoWrite pattern) - for tracking your own work items",
+        "Create or update todo progress tracking (TodoWrite pattern) - for tracking your own work items. USE THIS for ALL task tracking.",
       parameters: {
         type: "object",
         properties: {
@@ -73,12 +73,29 @@ const tools = [
                   description: "Todo status",
                   enum: ["pending", "in_progress", "completed", "failed"],
                 },
+                assigned_agent: {
+                  type: "string",
+                  description: "Agent assigned to this task (file, shell, web, code, conversation)",
+                  enum: ["file", "shell", "web", "code", "conversation"],
+                },
               },
               required: ["id", "description", "status"],
             },
           },
         },
         required: ["todos"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "todo_list",
+      description:
+        "Read-only view of the current todo list. Use this ONLY when explicitly asked to list todos.",
+      parameters: {
+        type: "object",
+        properties: {},
       },
     },
   },
@@ -123,7 +140,7 @@ const executors = {
     };
   },
 
-  async todo({ todos }) {
+  async todo_write({ todos }) {
     // Validate exactly one in_progress todo (TodoWrite pattern)
     const inProgressTodos = todos.filter((t) => t.status === "in_progress");
 
@@ -140,6 +157,15 @@ const executors = {
     return {
       success: true,
       todos,
+    };
+  },
+
+  async todo_list() {
+    // This will be handled by the orchestrator/server context, 
+    // but for now return a success message indicating it should be read from context
+    return {
+      success: true,
+      message: "Todo list retrieval is context-dependent",
     };
   },
 

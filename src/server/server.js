@@ -11,6 +11,7 @@ const logger = require("./utils/logger");
 // Multi-agent orchestration
 const { Planner } = require("./orchestrator/planner");
 const { Orchestrator } = require("./orchestrator/orchestrator");
+const { SpecialistFactory } = require("./orchestrator/specialist-factory");
 
 const {
   port: PORT,
@@ -310,23 +311,144 @@ app.post("/chat", async (req, res) => {
     logger.logRequest(userMsg, sessionId, chosenModel);
 
     const planner = new Planner({ model: chosenModel });
-    const orchestrator = new Orchestrator({ model: chosenModel });
+    // Orchestrator needs shared specialist factory for consistency
+    const specialistFactory = new SpecialistFactory({ model: chosenModel });
+    const orchestrator = new Orchestrator({ 
+      model: chosenModel, 
+      specialistFactory 
+    });
 
     // Get last plan for Phase 2 detection
     const lastPlan = lastPlanBySession.get(sessionId) || null;
+    
+    // --- Automatic Plan Execution (Workforce Model) ---
+    // If we have a pending plan with assigned agents, and the user says "yes" or similar,
+    // we bypass the Planner and execute directly.
+    const isApproval = /^(yes|y|proceed|approve|ok|sure|go ahead)/i.test(userMsg.trim());
+    if (lastPlan && isApproval) {
+        // Extract todos from last plan
+        const todoCall = lastPlan.tool_calls?.find(tc => tc.function.name === 'todo_write');
+        if (todoCall) {
+            const args = typeof todoCall.function.arguments === 'string' 
+                ? JSON.parse(todoCall.function.arguments) 
+                : todoCall.function.arguments;
+                
+            // Check if workforce model (has assigned_agent)
+            if (args.todos && args.todos.some(t => t.assigned_agent)) {
+                console.log("[server] Workforce plan approved. Executing directly.");
+                logger.logSystem("WORKFORCE_EXECUTION", { todos: args.todos.length });
+                
+                const result = await orchestrator.executeApprovedPlan(args.todos, { 
+                    model: chosenModel,
+                    userMessage: userMsg 
+                });
+                
+                // Process result same as below
+                const taskDetails = result.results.map((r, i) => {
+                  const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
+                  const content = r.result?.content || r.message || "";
+                  const error = r.error ? `\nError: ${r.error}` : "";
+                  return `**Task ${i + 1}** [${status}]\n${content}${error}`;
+                }).join("\n\n");
+                
+                const responseText = `${taskDetails}`;
+                lastPlanBySession.delete(sessionId);
+                
+                history.push({ role: "assistant", content: responseText });
+                appendToTodayLog(userMsg, responseText);
+                res.setHeader("Content-Type", "text/plain; charset=utf-8");
+                res.setHeader("Cache-Control", "no-cache");
+                res.write(responseText);
+                res.end();
+                return;
+            }
+        }
+    }
+    // ------------------------------------------------
 
-    // Planner analyzes and routes
+    // --- Speculative Execution Start ---
+    const startSpeculation = Date.now();
+    
+    // 1. Start Planner Analysis
     logger.logPlanner("ANALYZE", {
       message_length: userMsg.length,
       history_length: history.length,
     });
-    const plan = await planner.plan(history, { model: chosenModel, lastPlan });
+    const plannerPromise = planner.plan(history, { model: chosenModel, lastPlan });
+
+    // 2. Start Speculative Conversational Response
+    // Only speculate if:
+    // 1. No pending plan (Phase 2 always needs tools)
+    // 2. Not a specialized command (startsWith /)
+    // 3. Not obviously a tool request (file, create, search, etc.)
+    let speculativePromise = null;
+    const isToolRequest = /(file|folder|dir|desktop|create|make|write|read|delete|remove|search|find|run|exec)/i.test(userMsg);
+    
+    if (!lastPlan && !userMsg.toLowerCase().startsWith("/") && !isToolRequest) {
+       console.log("[server] Starting speculative conversational response...");
+       const taskDescription = `
+User Message: "${userMsg}"
+
+Context type: conversation
+Data: { "plannerContent": "Speculative execution" }
+
+Your Goal: Provide a friendly, natural response to the user. 
+- If the user is asking for an action (file/web/shell), politely offer help but do NOT refuse.
+- If it's a greeting or question, answer it.
+`;
+       speculativePromise = specialistFactory.spawnSpecialist("conversation", {
+          id: `spec_conv_${Date.now()}`,
+          title: "Speculative Response",
+          description: taskDescription
+       }, { model: chosenModel });
+    }
+
+    // Wait for Planner (primary decision maker)
+    const plan = await plannerPromise;
     logger.logPlanner("ROUTE", {
       type: plan.type,
       has_tool_calls: !!(plan.tool_calls && plan.tool_calls.length > 0),
     });
 
-    const result = await orchestrator.process(plan, { model: chosenModel });
+    let result;
+
+    // --- Decision Point ---
+    if (plan.type === "conversation" && speculativePromise) {
+      // Planner says it's just conversation - try to use speculative result
+      try {
+        const specResult = await speculativePromise;
+        if (specResult.success && specResult.result?.content) {
+          console.log(`[server] Speculative HIT! Saved ${Date.now() - startSpeculation}ms (approx)`);
+          
+          // Use the speculative content directly
+          result = {
+            type: "conversation",
+            content: specResult.result.content
+          };
+          
+          // Log it as fully processed
+          logger.logOrchestrator("ROUTE", {
+             decision: "CONVERSATION_SPECULATIVE",
+             reason: "Planner confirmed conversation, using speculative result"
+          });
+        } else {
+           // Speculation failed, fall back to normal processing
+           console.log("[server] Speculative execution failed, falling back to orchestrator");
+           result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+        }
+      } catch (e) {
+         console.warn("[server] Speculative promise error:", e);
+         result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+      }
+    } else {
+      // Planner needs tools OR speculation wasn't started
+      if (speculativePromise) {
+        console.log("[server] Speculative DISCARD. Planner requires tools/actions.");
+        // We just ignore the speculative promise, let it finish in background (or it gets GC'd)
+      }
+      result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+    }
+    // --- Speculative Execution End ---
 
     // Handle clarification responses
     if (result.type === "clarification") {
@@ -353,7 +475,7 @@ app.post("/chat", async (req, res) => {
             `${i + 1}. ${todo.description || todo.content} [${todo.status}]`,
         )
         .join("\n");
-      responseText = `${result.content}\n\n**Todo List:**\n${todoList}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
+      responseText = `**Todo List:**\n${todoList}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
 
       // Store plan for Phase 2 detection (separate from conversation history to avoid breaking Ollama)
       lastPlanBySession.set(sessionId, plan);

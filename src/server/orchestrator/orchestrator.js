@@ -1,15 +1,18 @@
 /**
  * Orchestrator for ChatDock
  * Handles Planner's tool calls: ask_user_question, todo, and task (subagent spawning)
+ * Routes FINAL output through Conversational Specialist
  * Based on Anthropic Cowork patterns
  */
 
 const { TaskExecutor } = require("./task-executor");
+const { SpecialistFactory } = require("./specialist-factory");
 const logger = require("../utils/logger");
 
 class Orchestrator {
   constructor(options = {}) {
     this.taskExecutor = options.taskExecutor || new TaskExecutor(options);
+    this.specialistFactory = options.specialistFactory || new SpecialistFactory(options);
     this.model = options.model;
   }
 
@@ -21,6 +24,7 @@ class Orchestrator {
    */
   async process(plannerResult, options = {}) {
     const { type, content, tool_calls } = plannerResult;
+    const userMessage = options.userMessage || "";
 
     logger.logOrchestrator("PROCESS", {
       result_type: type,
@@ -28,16 +32,24 @@ class Orchestrator {
       tool_call_count: tool_calls?.length || 0,
     });
 
-    // Pure conversation - no tool calls
+    let finalResponse;
+
+    // Pure conversation - route to conversational specialist
     if (type === "conversation") {
       logger.logOrchestrator("ROUTE", {
         decision: "CONVERSATION",
         reason: "No action required, responding directly",
       });
-      logger.logResponse("conversation", { content_length: content?.length });
+      
+      finalResponse = await this.generateConversationalResponse("conversation", {
+        plannerContent: content
+      }, userMessage, options);
+
+      logger.logResponse("conversation", { content_length: finalResponse.length });
+      
       return {
         type: "conversation",
-        content: content || "I'm here to help! What would you like to do?",
+        content: finalResponse,
       };
     }
 
@@ -54,13 +66,21 @@ class Orchestrator {
           question: args.question,
           options_count: args.options?.length || 0,
         });
+
+        // Generate friendly wrapper for the question
+        finalResponse = await this.generateConversationalResponse("clarification", {
+          question: args.question,
+          options: args.options
+        }, userMessage, options);
+
         logger.logResponse("clarification", {
           question: args.question,
           options: args.options,
         });
+        
         return {
           type: "clarification",
-          content: content || "",
+          content: finalResponse,
           question: args.question,
           options: args.options,
         };
@@ -73,7 +93,7 @@ class Orchestrator {
         decision: "TASK_EXECUTION",
         reason: "Spawning specialists to handle tasks",
       });
-      return await this.handleTasks(tool_calls, content, options);
+      return await this.handleTasks(tool_calls, content, userMessage, options);
     }
 
     // Fallback
@@ -82,26 +102,78 @@ class Orchestrator {
       reason: "Unknown result type",
       type,
     });
+    
+    // Generate polite error message
+    finalResponse = await this.generateConversationalResponse("error", {
+      error: "I'm not sure how to handle that request type."
+    }, userMessage, options);
+    
     logger.logResponse("conversation", { fallback: true });
     return {
       type: "conversation",
-      content: content || "I'm not sure how to handle that request.",
+      content: finalResponse,
     };
+  }
+  
+  /**
+   * Execute a pre-approved plan (todos) directly
+   * Used by the Workforce model to bypass Phase 2 planning
+   * @param {Array} todos
+   * @param {Object} options
+   */
+  async executeApprovedPlan(todos, options) {
+      const tasks = todos
+          .filter(t => t.assigned_agent) // Only execute tasks with assigned agents
+          .map(t => ({
+              agent_type: t.assigned_agent,
+              task_description: t.description || t.content,
+              context: `Execute this task as part of the approved plan. Status: ${t.status}. Active form: ${t.activeForm || ''}`
+          }));
+
+      logger.logOrchestrator("EXECUTE_PLAN", {
+          task_count: tasks.length,
+          agents: tasks.map(t => t.agent_type)
+      });
+
+      // Execute in parallel (or sequential if dependencies added later)
+      // For now, simple parallel execution using existing logic
+      if (tasks.length === 0) {
+          return { results: [], summary: "No executable tasks found in plan." };
+      }
+
+      // Re-use handleTasks logic partially, but we don't need to parse tool calls
+      // Just execute directly
+      let results;
+       tasks.forEach((task, i) => {
+        logger.logTaskCreated(
+          { id: `task_${Date.now()}_${i}`, title: task.task_description?.substring(0, 50), description: task.task_description },
+          task.agent_type
+        );
+      });
+      
+      const parallelResult = await this.taskExecutor.executeParallel(tasks, options);
+      results = parallelResult.results || parallelResult;
+      
+      return { 
+          results, 
+          summary: `Executed ${results.length} tasks from approved plan.` 
+      };
   }
 
   /**
    * Handle task tool calls (subagent spawning)
    * @param {Array} tool_calls
    * @param {string} content - Planner's explanation
+   * @param {string} userMessage
    * @param {Object} options
    * @returns {Promise<Object>}
    */
-  async handleTasks(tool_calls, content, options) {
+  async handleTasks(tool_calls, content, userMessage, options) {
     // Extract task calls and todo calls
     const taskCalls =
       tool_calls?.filter((tc) => tc.function?.name === "task") || [];
     const todoCalls =
-      tool_calls?.filter((tc) => tc.function?.name === "todo") || [];
+      tool_calls?.filter((tc) => tc.function?.name === "todo_write") || [];
 
     // Log todo list if present
     const todos = this.extractTodos(todoCalls);
@@ -115,9 +187,16 @@ class Orchestrator {
         todos_created: todos.length,
         reason: "No tasks to execute, only planning",
       });
+      
+      // Generate conversational confirmation of the plan/todos
+      const finalResponse = await this.generateConversationalResponse("plan_approval", {
+        plannerContent: content,
+        todos
+      }, userMessage, options);
+
       return {
         type: "task",
-        content: content || "Planning complete",
+        content: finalResponse,
         todos,
         results: [],
       };
@@ -185,6 +264,13 @@ class Orchestrator {
       todos_created: todos.length,
     });
 
+    // Generate conversational summary of execution
+    const finalResponse = await this.generateConversationalResponse("execution_results", {
+      summary,
+      results,
+      todos
+    }, userMessage, options);
+
     logger.logResponse("task", {
       success_count: successCount,
       fail_count: failCount,
@@ -193,11 +279,53 @@ class Orchestrator {
 
     return {
       type: "task",
-      content: content || summary,
+      content: finalResponse,
       todos,
       results,
       summary,
     };
+  }
+
+  /**
+   * Use Conversational Specialist to generate final output
+   * @param {string} type - conversation, clarification, plan_approval, execution_results, error
+   * @param {Object} data - context data for the response
+   * @param {string} userMessage - original user message
+   * @param {Object} options
+   */
+  async generateConversationalResponse(type, data, userMessage, options) {
+    const taskDescription = `
+User Message: "${userMessage}"
+
+Context type: ${type}
+Data: ${JSON.stringify(data, null, 2)}
+
+Your Goal: Provide a friendly, natural response to the user based on this context. 
+- If clarifying, present the question and options clearly.
+- If reporting results, summarize what was done successfully and any errors.
+- If planning, ask for approval on the todo list.
+- Keep it concise and helpful.
+`;
+
+    try {
+      const result = await this.specialistFactory.spawnSpecialist("conversation", {
+        id: `conv_${Date.now()}`,
+        title: "Generate Response",
+        description: taskDescription
+      }, options);
+
+      if (result.success && result.result?.content) {
+        return result.result.content;
+      }
+      return "I processed your request, but had trouble generating a response.";
+    } catch (error) {
+      console.error("[orchestrator] Failed to generate conversational response:", error);
+      // Fallback if conversational agent fails
+      if (type === "conversation") return data.plannerContent || "I'm here.";
+      if (type === "clarification") return data.question;
+      if (type === "execution_results") return data.summary;
+      return "Something went wrong.";
+    }
   }
 
   /**

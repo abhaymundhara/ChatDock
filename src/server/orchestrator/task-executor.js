@@ -9,7 +9,7 @@ const logger = require("../utils/logger");
 
 // Default configuration
 const DEFAULT_CONFIG = {
-  maxRetries: 2,
+  maxRetries: 5, // Increased for iterative self-correction
   retryDelayMs: 500,
   maxConcurrent: 3, // Limit concurrent specialists to avoid overwhelming the system
   continueOnFailure: true, // Graceful degradation
@@ -30,6 +30,7 @@ class TaskExecutor {
    * @returns {Promise<Object>}
    */
   async execute(taskCall, options = {}) {
+    // ... setup ...
     const { agent_type, task_description, context } = taskCall;
     const model = options.model || this.model;
     const maxRetries = options.maxRetries ?? this.config.maxRetries;
@@ -49,14 +50,24 @@ class TaskExecutor {
     while (attempts <= maxRetries) {
       attempts++;
 
-      if (attempts > 1) {
+      // If this is a retry, provide feedback
+      const spawnOptions = { model };
+      if (attempts > 1 && lastError) {
+        spawnOptions.previousError = lastError;
+        spawnOptions.attempt = attempts;
+        
         logger.log("WARN", "TASK_EXECUTOR", `Retry attempt ${attempts - 1}/${maxRetries} for ${agent_type}`, {
           agent_type,
           attempt: attempts,
-          max_retries: maxRetries,
           last_error: lastError,
-          delay_ms: this.config.retryDelayMs * attempts,
         });
+        
+        // Fatal error check
+        if (typeof lastError === 'string' && (lastError.includes("Model not found") || lastError.includes("Connection refused"))) {
+             logger.log("ERROR", "TASK_EXECUTOR", "Aborting retries due to fatal error");
+             break;
+        }
+
         // Wait before retry
         await this.delay(this.config.retryDelayMs * attempts);
       }
@@ -70,11 +81,11 @@ class TaskExecutor {
             task_description + (context ? `\n\nContext: ${context}` : ""),
         };
 
-        // Spawn specialist
+        // Spawn specialist with feedback options
         const result = await this.specialistFactory.spawnSpecialist(
           agent_type,
           task,
-          { model },
+          spawnOptions
         );
 
         const duration = Date.now() - startTime;
@@ -82,12 +93,8 @@ class TaskExecutor {
         if (result.success) {
           logger.log("INFO", "TASK_EXECUTOR", `${agent_type} specialist completed successfully`, {
             agent_type,
-            task_id: task.id,
-            duration_ms: duration,
             attempts,
             status: "SUCCESS",
-            has_content: !!result.result?.content,
-            tool_calls_count: result.result?.tool_calls?.length || 0,
           });
           return {
             success: true,
@@ -99,13 +106,12 @@ class TaskExecutor {
           };
         }
 
-        // Task failed but didn't throw - treat as retriable
+        // Task failed
         lastError = result.error || "Unknown error";
         logger.log("WARN", "TASK_EXECUTOR", `${agent_type} specialist returned failure`, {
           agent_type,
           attempt: attempts,
           error: lastError,
-          will_retry: attempts <= maxRetries,
         });
       } catch (error) {
         lastError = error.message;
@@ -113,7 +119,6 @@ class TaskExecutor {
           agent_type,
           attempt: attempts,
           error: error.message,
-          will_retry: attempts <= maxRetries,
         });
       }
     }

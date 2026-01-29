@@ -132,7 +132,12 @@ class FileSpecialist {
             const systemPrompt = this.getSystemPrompt();
 
             // Build fresh context message - ONLY task description
-            const taskMessage = `Task: ${task.title}\n\nDescription: ${task.description}`;
+            let taskMessage = `Task: ${task.title}\n\nDescription: ${task.description}`;
+
+            // Inject feedback from previous attempt
+            if (options.previousError) {
+                taskMessage += `\n\n[PREVIOUS ATTEMPT FAILED]\nThe previous attempt failed with error:\n"${options.previousError}"\n\nPlease fix the error and try again.`;
+            }
 
             // Get file tools
             const registry = require("../../tools/registry");

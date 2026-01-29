@@ -46,7 +46,7 @@ class Planner {
 
     try {
       const registry = require("../tools/registry");
-      // Planner only gets its 3 coordination tools: ask_user_question, todo, task
+      // Planner only gets its 3 coordination tools: ask_user_question, todo_write, task
       // Tool awareness is described in PLANNER.md, not via actual tool definitions
       const rawTools = await registry.getToolsByCategory("planner");
 
@@ -99,7 +99,7 @@ class Planner {
 
     // Check if last plan had a todo (without task) - indicating Phase 1
     const hadTodo = lastPlan.tool_calls.some(
-      (tc) => tc.function?.name === "todo",
+      (tc) => tc.function?.name === "todo_write",
     );
     const hadTask = lastPlan.tool_calls.some(
       (tc) => tc.function?.name === "task",
@@ -121,7 +121,7 @@ class Planner {
     if (!lastPlan || !lastPlan.tool_calls) return null;
 
     const todoCall = lastPlan.tool_calls.find(
-      (tc) => tc.function?.name === "todo",
+      (tc) => tc.function?.name === "todo_write",
     );
     if (!todoCall) return null;
 
@@ -194,7 +194,7 @@ class Planner {
           id: "planner_todo_1",
           type: "function",
           function: {
-            name: "todo",
+            name: "todo_write",
             arguments: JSON.stringify({
               todos: [
                 {
@@ -234,7 +234,7 @@ class Planner {
             id: "planner_todo_1",
             type: "function",
             function: {
-              name: "todo",
+              name: "todo_write",
               arguments: JSON.stringify({
                 todos: [
                   {
@@ -255,7 +255,7 @@ class Planner {
           id: "planner_todo_1",
           type: "function",
           function: {
-            name: "todo",
+            name: "todo_write",
             arguments: JSON.stringify({
               todos: [
                 {
@@ -275,7 +275,7 @@ class Planner {
           id: "planner_todo_1",
           type: "function",
           function: {
-            name: "todo",
+            name: "todo_write",
             arguments: JSON.stringify({
               todos: [
                 {
@@ -443,6 +443,15 @@ class Planner {
       ...conversationHistory,
     ];
 
+    // INJECT SYSTEM HINT for tool-heavy requests (Force 3B model compliance)
+    if (this.needsToolUse(userText)) {
+      const lastMsg = messages[messages.length - 1];
+      if (lastMsg.role === "user") {
+        lastMsg.content += "\n\n[SYSTEM HINT]: Your request implies a file, shell, or search operation. You MUST use the `todo_write` tool. Do NOT respond with pure conversation.";
+        console.log("[planner] Injected system hint to force tool usage");
+      }
+    }
+
     // Call LLM with tools
     console.log("[planner] Calling LLM with tool awareness...");
     console.log(
@@ -508,7 +517,7 @@ class Planner {
     if (hasTaskTracking) {
       console.log("[planner] Result: TASK execution");
       const todoCount = response.tool_calls.filter(
-        (tc) => tc.function?.name === "todo",
+        (tc) => tc.function?.name === "todo_write",
       ).length;
       const taskCount = response.tool_calls.filter(
         (tc) => tc.function?.name === "task",
