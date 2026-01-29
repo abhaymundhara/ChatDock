@@ -5,6 +5,7 @@
  */
 
 const { SpecialistFactory } = require("./specialist-factory");
+const logger = require("../utils/logger");
 
 // Default configuration
 const DEFAULT_CONFIG = {
@@ -33,7 +34,12 @@ class TaskExecutor {
     const model = options.model || this.model;
     const maxRetries = options.maxRetries ?? this.config.maxRetries;
 
-    console.log(`[task-executor] Spawning ${agent_type} subagent`);
+    logger.log("INFO", "TASK_EXECUTOR", `Spawning ${agent_type} subagent`, {
+      agent_type,
+      max_retries: maxRetries,
+      model,
+      description_preview: task_description?.substring(0, 100),
+    });
 
     const startTime = Date.now();
     let lastError = null;
@@ -44,9 +50,13 @@ class TaskExecutor {
       attempts++;
 
       if (attempts > 1) {
-        console.log(
-          `[task-executor] Retry attempt ${attempts - 1}/${maxRetries} for ${agent_type}`,
-        );
+        logger.log("WARN", "TASK_EXECUTOR", `Retry attempt ${attempts - 1}/${maxRetries} for ${agent_type}`, {
+          agent_type,
+          attempt: attempts,
+          max_retries: maxRetries,
+          last_error: lastError,
+          delay_ms: this.config.retryDelayMs * attempts,
+        });
         // Wait before retry
         await this.delay(this.config.retryDelayMs * attempts);
       }
@@ -70,9 +80,15 @@ class TaskExecutor {
         const duration = Date.now() - startTime;
 
         if (result.success) {
-          console.log(
-            `[task-executor] ${agent_type} completed in ${duration}ms`,
-          );
+          logger.log("INFO", "TASK_EXECUTOR", `${agent_type} specialist completed successfully`, {
+            agent_type,
+            task_id: task.id,
+            duration_ms: duration,
+            attempts,
+            status: "SUCCESS",
+            has_content: !!result.result?.content,
+            tool_calls_count: result.result?.tool_calls?.length || 0,
+          });
           return {
             success: true,
             agent_type,
@@ -85,20 +101,33 @@ class TaskExecutor {
 
         // Task failed but didn't throw - treat as retriable
         lastError = result.error || "Unknown error";
-        console.warn(`[task-executor] ${agent_type} failed: ${lastError}`);
+        logger.log("WARN", "TASK_EXECUTOR", `${agent_type} specialist returned failure`, {
+          agent_type,
+          attempt: attempts,
+          error: lastError,
+          will_retry: attempts <= maxRetries,
+        });
       } catch (error) {
         lastError = error.message;
-        console.error(
-          `[task-executor] ${agent_type} threw error: ${error.message}`,
-        );
+        logger.logError("TASK_EXECUTOR", `${agent_type} specialist threw error`, {
+          agent_type,
+          attempt: attempts,
+          error: error.message,
+          will_retry: attempts <= maxRetries,
+        });
       }
     }
 
     // All retries exhausted
     const duration = Date.now() - startTime;
-    console.error(
-      `[task-executor] ${agent_type} failed after ${attempts} attempts`,
-    );
+    logger.log("ERROR", "TASK_EXECUTOR", `${agent_type} specialist FAILED after all retries`, {
+      agent_type,
+      duration_ms: duration,
+      attempts,
+      retries_exhausted: true,
+      final_error: lastError,
+      status: "FAILED",
+    });
 
     return {
       success: false,
@@ -121,21 +150,30 @@ class TaskExecutor {
     const continueOnFailure =
       options.continueOnFailure ?? this.config.continueOnFailure;
 
-    console.log(
-      `[task-executor] Executing ${taskCalls.length} tasks (max concurrent: ${maxConcurrent})`,
-    );
+    logger.log("INFO", "TASK_EXECUTOR", `Starting parallel execution`, {
+      total_tasks: taskCalls.length,
+      max_concurrent: maxConcurrent,
+      continue_on_failure: continueOnFailure,
+      agents: taskCalls.map(t => t.agent_type),
+    });
 
     const startTime = Date.now();
     const results = [];
     const errors = [];
 
     // Process in batches if we have more tasks than concurrency limit
+    const totalBatches = Math.ceil(taskCalls.length / maxConcurrent);
+
     for (let i = 0; i < taskCalls.length; i += maxConcurrent) {
       const batch = taskCalls.slice(i, i + maxConcurrent);
+      const batchNum = Math.floor(i / maxConcurrent) + 1;
 
-      console.log(
-        `[task-executor] Processing batch ${Math.floor(i / maxConcurrent) + 1} (${batch.length} tasks)`,
-      );
+      logger.log("INFO", "TASK_EXECUTOR", `Processing batch ${batchNum}/${totalBatches}`, {
+        batch_number: batchNum,
+        total_batches: totalBatches,
+        batch_size: batch.length,
+        agents_in_batch: batch.map(t => t.agent_type),
+      });
 
       const batchResults = await Promise.allSettled(
         batch.map((taskCall) => this.execute(taskCall, options)),
@@ -161,11 +199,24 @@ class TaskExecutor {
         }
       }
 
+      // Log batch completion
+      const batchSuccess = batchResults.filter(r => r.status === "fulfilled" && r.value.success).length;
+      const batchFailed = batch.length - batchSuccess;
+
+      logger.log("INFO", "TASK_EXECUTOR", `Batch ${batchNum} completed`, {
+        batch_number: batchNum,
+        succeeded: batchSuccess,
+        failed: batchFailed,
+        cumulative_results: results.length,
+      });
+
       // Check if we should stop on failure
       if (!continueOnFailure && errors.length > 0) {
-        console.warn(
-          `[task-executor] Stopping due to failure (continueOnFailure=false)`,
-        );
+        logger.log("WARN", "TASK_EXECUTOR", `Stopping parallel execution due to failure`, {
+          continue_on_failure: false,
+          errors_count: errors.length,
+          remaining_batches: totalBatches - batchNum,
+        });
         break;
       }
     }
@@ -174,9 +225,14 @@ class TaskExecutor {
     const successCount = results.filter((r) => r.success).length;
     const failureCount = results.filter((r) => !r.success).length;
 
-    console.log(
-      `[task-executor] Parallel execution completed: ${successCount} succeeded, ${failureCount} failed in ${duration}ms`,
-    );
+    logger.log("INFO", "TASK_EXECUTOR", `Parallel execution completed`, {
+      total_tasks: results.length,
+      succeeded: successCount,
+      failed: failureCount,
+      success_rate: `${Math.round((successCount / results.length) * 100)}%`,
+      duration_ms: duration,
+      errors: errors.length > 0 ? errors : undefined,
+    });
 
     return {
       results,

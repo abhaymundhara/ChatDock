@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
+const logger = require("./utils/logger");
 
 // Multi-agent orchestration
 const { Planner } = require("./orchestrator/planner");
@@ -218,10 +219,17 @@ app.post("/chat/agent", async (req, res) => {
     const planner = new Planner({ model: chosenModel });
     const orchestrator = new Orchestrator({ model: chosenModel });
 
+    // Log request
+    logger.logRequest(userMsg, sessionId, chosenModel);
+
     // Step 1: Planner analyzes intent
-    console.log("[agent] Planner analyzing request...");
+    logger.logPlanner("ANALYZE", { message_length: userMsg.length, history_length: history.length });
     const plan = await planner.plan(history, { model: chosenModel });
-    console.log("[agent] Planner result:", plan.type);
+    logger.logPlanner("ROUTE", {
+      type: plan.type,
+      has_tool_calls: !!(plan.tool_calls && plan.tool_calls.length > 0),
+      tool_count: plan.tool_calls?.length || 0,
+    });
 
     // Step 2: Orchestrator processes plan (handles conversation, clarification, and task spawning)
     const result = await orchestrator.process(plan, { model: chosenModel });
@@ -294,12 +302,20 @@ app.post("/chat", async (req, res) => {
       history.splice(0, history.length - 20);
     }
 
-    // Use multi-agent architecture
-    console.log("[chat] Using multi-agent: Planner → Orchestrator");
+    // Log the request
+    logger.logRequest(userMsg, sessionId, chosenModel);
+
     const planner = new Planner({ model: chosenModel });
     const orchestrator = new Orchestrator({ model: chosenModel });
 
+    // Planner analyzes and routes
+    logger.logPlanner("ANALYZE", { message_length: userMsg.length, history_length: history.length });
     const plan = await planner.plan(history, { model: chosenModel });
+    logger.logPlanner("ROUTE", {
+      type: plan.type,
+      has_tool_calls: !!(plan.tool_calls && plan.tool_calls.length > 0),
+    });
+
     const result = await orchestrator.process(plan, { model: chosenModel });
 
     // Handle clarification responses
@@ -333,20 +349,40 @@ app.post("/chat", async (req, res) => {
 
 /* Start server */
 (() => {
+  // Initialize logging session
+  logger.initSession();
+  logger.logSystem("Server starting", { port: PORT, host: HOST });
+
   const server = http.createServer(app);
 
   server.on("error", (err) => {
+    logger.logError("SERVER", "Failed to start server", err);
     console.error("[server] failed to start server:", err);
     process.exit(1);
+  });
+
+  // Handle shutdown gracefully
+  process.on("SIGINT", () => {
+    logger.logSystem("Server shutting down (SIGINT)");
+    logger.endSession({ reason: "SIGINT" });
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", () => {
+    logger.logSystem("Server shutting down (SIGTERM)");
+    logger.endSession({ reason: "SIGTERM" });
+    process.exit(0);
   });
 
   server.listen(PORT, HOST, () => {
     process.env.CHAT_SERVER_PORT = String(PORT);
     process.env.CHAT_SERVER_HOST = HOST;
     console.log(`[server] listening on http://${HOST}:${PORT}`);
+    logger.logSystem("Server started", { url: `http://${HOST}:${PORT}` });
     const last = loadLastModel();
     if (last) {
       console.log(`[server] last chosen model: ${last}`);
+      logger.logSystem("Last model loaded", { model: last });
     } else {
       console.log(
         "[server] no last model chosen; requests must include a 'model' field",

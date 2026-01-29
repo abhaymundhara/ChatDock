@@ -5,6 +5,7 @@
  */
 
 const { TaskExecutor } = require("./task-executor");
+const logger = require("../utils/logger");
 
 class Orchestrator {
   constructor(options = {}) {
@@ -21,8 +22,19 @@ class Orchestrator {
   async process(plannerResult, options = {}) {
     const { type, content, tool_calls } = plannerResult;
 
+    logger.logOrchestrator("PROCESS", {
+      result_type: type,
+      has_tool_calls: !!(tool_calls && tool_calls.length > 0),
+      tool_call_count: tool_calls?.length || 0,
+    });
+
     // Pure conversation - no tool calls
     if (type === "conversation") {
+      logger.logOrchestrator("ROUTE", {
+        decision: "CONVERSATION",
+        reason: "No action required, responding directly",
+      });
+      logger.logResponse("conversation", { content_length: content?.length });
       return {
         type: "conversation",
         content: content || "I'm here to help! What would you like to do?",
@@ -36,6 +48,16 @@ class Orchestrator {
       );
       if (askCall) {
         const args = this.parseArgs(askCall.function.arguments);
+        logger.logOrchestrator("ROUTE", {
+          decision: "CLARIFICATION",
+          reason: "Need more information from user",
+          question: args.question,
+          options_count: args.options?.length || 0,
+        });
+        logger.logResponse("clarification", {
+          question: args.question,
+          options: args.options,
+        });
         return {
           type: "clarification",
           content: content || "",
@@ -47,10 +69,20 @@ class Orchestrator {
 
     // Task execution with subagent spawning
     if (type === "task") {
+      logger.logOrchestrator("ROUTE", {
+        decision: "TASK_EXECUTION",
+        reason: "Spawning specialists to handle tasks",
+      });
       return await this.handleTasks(tool_calls, content, options);
     }
 
     // Fallback
+    logger.logOrchestrator("ROUTE", {
+      decision: "FALLBACK",
+      reason: "Unknown result type",
+      type,
+    });
+    logger.logResponse("conversation", { fallback: true });
     return {
       type: "conversation",
       content: content || "I'm not sure how to handle that request.",
@@ -71,11 +103,22 @@ class Orchestrator {
     const todoCalls =
       tool_calls?.filter((tc) => tc.function?.name === "todo") || [];
 
+    // Log todo list if present
+    const todos = this.extractTodos(todoCalls);
+    if (todos.length > 0) {
+      logger.logTodoList(todos);
+    }
+
     if (taskCalls.length === 0) {
+      logger.logOrchestrator("COMPLETE", {
+        tasks_executed: 0,
+        todos_created: todos.length,
+        reason: "No tasks to execute, only planning",
+      });
       return {
         type: "task",
         content: content || "Planning complete",
-        todos: this.extractTodos(todoCalls),
+        todos,
         results: [],
       };
     }
@@ -83,24 +126,75 @@ class Orchestrator {
     // Parse task calls
     const tasks = taskCalls.map((tc) => this.parseArgs(tc.function.arguments));
 
+    logger.log("INFO", "ORCHESTRATOR", `Preparing to execute ${tasks.length} task(s)`, {
+      task_count: tasks.length,
+      agents: tasks.map(t => t.agent_type),
+      parallel: tasks.length > 1,
+    });
+
     // Execute tasks
     let results;
     if (tasks.length === 1) {
       // Single task
+      logger.logTaskCreated(
+        { id: `task_${Date.now()}`, title: tasks[0].task_description?.substring(0, 50), description: tasks[0].task_description },
+        tasks[0].agent_type
+      );
       results = [await this.taskExecutor.execute(tasks[0], options)];
     } else {
       // Multiple tasks - execute in parallel
-      results = await this.taskExecutor.executeParallel(tasks, options);
+      tasks.forEach((task, i) => {
+        logger.logTaskCreated(
+          { id: `task_${Date.now()}_${i}`, title: task.task_description?.substring(0, 50), description: task.task_description },
+          task.agent_type
+        );
+      });
+      const parallelResult = await this.taskExecutor.executeParallel(tasks, options);
+      results = parallelResult.results || parallelResult;
     }
 
     // Build response
     const successCount = results.filter((r) => r.success).length;
+    const failCount = results.filter((r) => !r.success).length;
     const summary = `Completed ${successCount}/${results.length} tasks`;
+
+    // Log completion for each task
+    results.forEach((result, i) => {
+      logger.logTaskComplete(
+        result.task_id || `task_${i}`,
+        result.success,
+        {
+          agent_type: result.agent_type,
+          duration_ms: result.duration_ms,
+          error: result.error,
+        }
+      );
+    });
+
+    logger.logOrchestrator("AGGREGATE", {
+      total_tasks: results.length,
+      succeeded: successCount,
+      failed: failCount,
+      success_rate: `${Math.round((successCount / results.length) * 100)}%`,
+    });
+
+    logger.logOrchestrator("COMPLETE", {
+      tasks_executed: results.length,
+      tasks_succeeded: successCount,
+      tasks_failed: failCount,
+      todos_created: todos.length,
+    });
+
+    logger.logResponse("task", {
+      success_count: successCount,
+      fail_count: failCount,
+      content_length: content?.length,
+    });
 
     return {
       type: "task",
       content: content || summary,
-      todos: this.extractTodos(todoCalls),
+      todos,
       results,
       summary,
     };

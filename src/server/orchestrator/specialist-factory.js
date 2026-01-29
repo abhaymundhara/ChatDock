@@ -7,6 +7,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { OllamaClient } = require("./ollama-client");
+const logger = require("../utils/logger");
 
 /**
  * Load specialist system prompt
@@ -93,10 +94,13 @@ class SpecialistFactory {
    */
   async spawnSpecialist(specialistName, task, options = {}) {
     const model = options.model || this.model;
+    const startTime = Date.now();
 
-    console.log(
-      `[specialist-factory] Spawning ${specialistName} specialist for task ${task.id}`,
-    );
+    logger.logSpecialist(specialistName, task.id, "START", {
+      title: task.title,
+      description: task.description.substring(0, 200),
+      model,
+    });
 
     try {
       // Get specialist prompt
@@ -126,6 +130,12 @@ class SpecialistFactory {
         // Execute any tool calls
         if (response.tool_calls && response.tool_calls.length > 0) {
           const toolResults = await this.executeToolCalls(response.tool_calls);
+          const duration = Date.now() - startTime;
+
+          logger.logSpecialist(specialistName, task.id, "COMPLETE", {
+            duration_ms: duration,
+            tool_calls: response.tool_calls.length,
+          });
 
           return {
             success: true,
@@ -144,6 +154,12 @@ class SpecialistFactory {
         });
       }
 
+      const duration = Date.now() - startTime;
+      logger.logSpecialist(specialistName, task.id, "COMPLETE", {
+        duration_ms: duration,
+        hasContent: !!response.content,
+      });
+
       return {
         success: true,
         result: {
@@ -152,10 +168,12 @@ class SpecialistFactory {
         },
       };
     } catch (error) {
-      console.error(
-        `[specialist-factory] ${specialistName} specialist failed:`,
-        error.message,
-      );
+      const duration = Date.now() - startTime;
+      logger.logSpecialist(specialistName, task.id, "FAIL", {
+        duration_ms: duration,
+        error: error.message,
+      });
+
       return {
         success: false,
         error: error.message,
@@ -186,12 +204,31 @@ class SpecialistFactory {
         // Parse arguments if they're a string
         const args =
           typeof toolArgs === "string" ? JSON.parse(toolArgs) : toolArgs || {};
+
+        // Log tool call start with arguments
+        const cleanArgs = { ...args };
+        delete cleanArgs.__context;
+        logger.logTool(toolName, "CALL", {
+          arguments: cleanArgs,
+          arg_keys: Object.keys(cleanArgs),
+        });
+
+        const toolStartTime = Date.now();
         const result = await registry.executeTool(toolName, {
           ...args,
           __context: toolContext,
         });
+        const toolDuration = Date.now() - toolStartTime;
+
+        // Log detailed tool execution
+        logger.logToolExecution(toolName, args, result, toolDuration);
+
         results.push(result);
       } catch (error) {
+        logger.logTool(toolName, "FAIL", {
+          error: error.message,
+          stack: error.stack?.split("\n").slice(0, 3).join("\n"),
+        });
         results.push({ error: error.message });
       }
     }
