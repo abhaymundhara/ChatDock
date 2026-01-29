@@ -58,11 +58,11 @@ async function getToolsForSpecialist(specialistType) {
   await ensureInitialized();
 
   const categoryMap = {
-    file: ["fs", "memory"],
-    shell: ["system", "memory"],
-    web: ["web", "memory"],
-    code: ["fs", "system", "memory"], // Code specialist can use fs and system
-    conversation: ["memory"],
+    file: ["fs"],
+    shell: ["system"],
+    web: ["web"],
+    code: ["fs", "system"], // Code specialist can use fs and system
+    conversation: [],
     planner: ["planner", "fs", "system", "web", "memory"], // Planner sees all for awareness
   };
 
