@@ -313,68 +313,78 @@ app.post("/chat", async (req, res) => {
     const planner = new Planner({ model: chosenModel });
     // Orchestrator needs shared specialist factory for consistency
     const specialistFactory = new SpecialistFactory({ model: chosenModel });
-    const orchestrator = new Orchestrator({ 
-      model: chosenModel, 
-      specialistFactory 
+    const orchestrator = new Orchestrator({
+      model: chosenModel,
+      specialistFactory,
     });
 
     // Get last plan for Phase 2 detection
     const lastPlan = lastPlanBySession.get(sessionId) || null;
-    
+
     // --- Automatic Plan Execution (Workforce Model) ---
     // If we have a pending plan with assigned agents, and the user says "yes" or similar,
     // we bypass the Planner and execute directly.
-    const isApproval = /^(yes|y|proceed|approve|ok|sure|go ahead)/i.test(userMsg.trim());
+    const isApproval = /^(yes|y|proceed|approve|ok|sure|go ahead)/i.test(
+      userMsg.trim(),
+    );
     if (lastPlan && isApproval) {
-        // Extract todos from last plan
-        const todoCall = lastPlan.tool_calls?.find(tc => tc.function.name === 'todo_write');
-        if (todoCall) {
-            const args = typeof todoCall.function.arguments === 'string' 
-                ? JSON.parse(todoCall.function.arguments) 
-                : todoCall.function.arguments;
-                
-            // Check if workforce model (has assigned_agent)
-            if (args.todos && args.todos.some(t => t.assigned_agent)) {
-                console.log("[server] Workforce plan approved. Executing directly.");
-                logger.logSystem("WORKFORCE_EXECUTION", { todos: args.todos.length });
-                
-                const result = await orchestrator.executeApprovedPlan(args.todos, { 
-                    model: chosenModel,
-                    userMessage: userMsg 
-                });
-                
-                // Process result same as below
-                const taskDetails = result.results.map((r, i) => {
-                  const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
-                  const content = r.result?.content || r.message || "";
-                  const error = r.error ? `\nError: ${r.error}` : "";
-                  return `**Task ${i + 1}** [${status}]\n${content}${error}`;
-                }).join("\n\n");
-                
-                const responseText = `${taskDetails}`;
-                lastPlanBySession.delete(sessionId);
-                
-                history.push({ role: "assistant", content: responseText });
-                appendToTodayLog(userMsg, responseText);
-                res.setHeader("Content-Type", "text/plain; charset=utf-8");
-                res.setHeader("Cache-Control", "no-cache");
-                res.write(responseText);
-                res.end();
-                return;
-            }
+      // Extract todos from last plan
+      const todoCall = lastPlan.tool_calls?.find(
+        (tc) => tc.function.name === "todo_write",
+      );
+      if (todoCall) {
+        const args =
+          typeof todoCall.function.arguments === "string"
+            ? JSON.parse(todoCall.function.arguments)
+            : todoCall.function.arguments;
+
+        // Check if workforce model (has assigned_agent)
+        if (args.todos && args.todos.some((t) => t.assigned_agent)) {
+          console.log("[server] Workforce plan approved. Executing directly.");
+          logger.logSystem("WORKFORCE_EXECUTION", { todos: args.todos.length });
+
+          const result = await orchestrator.executeApprovedPlan(args.todos, {
+            model: chosenModel,
+            userMessage: userMsg,
+          });
+
+          // Process result same as below
+          const taskDetails = result.results
+            .map((r, i) => {
+              const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
+              const content = r.result?.content || r.message || "";
+              const error = r.error ? `\nError: ${r.error}` : "";
+              return `**Task ${i + 1}** [${status}]\n${content}${error}`;
+            })
+            .join("\n\n");
+
+          const responseText = `${taskDetails}`;
+          lastPlanBySession.delete(sessionId);
+
+          history.push({ role: "assistant", content: responseText });
+          appendToTodayLog(userMsg, responseText);
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          res.write(responseText);
+          res.end();
+          return;
         }
+      }
     }
     // ------------------------------------------------
 
     // --- Speculative Execution Start ---
     const startSpeculation = Date.now();
-    
+
     // 1. Start Planner Analysis
     logger.logPlanner("ANALYZE", {
       message_length: userMsg.length,
       history_length: history.length,
     });
-    const plannerPromise = planner.plan(history, { model: chosenModel, lastPlan });
+    const plannerPromise = planner.plan(history, {
+      model: chosenModel,
+      lastPlan,
+    });
 
     // 2. Start Speculative Conversational Response
     // Only speculate if:
@@ -382,11 +392,14 @@ app.post("/chat", async (req, res) => {
     // 2. Not a specialized command (startsWith /)
     // 3. Not obviously a tool request (file, create, search, etc.)
     let speculativePromise = null;
-    const isToolRequest = /(file|folder|dir|desktop|create|make|write|read|delete|remove|search|find|run|exec)/i.test(userMsg);
-    
+    const isToolRequest =
+      /(file|folder|dir|desktop|create|make|write|read|delete|remove|search|find|run|exec)/i.test(
+        userMsg,
+      );
+
     if (!lastPlan && !userMsg.toLowerCase().startsWith("/") && !isToolRequest) {
-       console.log("[server] Starting speculative conversational response...");
-       const taskDescription = `
+      console.log("[server] Starting speculative conversational response...");
+      const taskDescription = `
 User Message: "${userMsg}"
 
 Context type: conversation
@@ -396,11 +409,15 @@ Your Goal: Provide a friendly, natural response to the user.
 - If the user is asking for an action (file/web/shell), politely offer help but do NOT refuse.
 - If it's a greeting or question, answer it.
 `;
-       speculativePromise = specialistFactory.spawnSpecialist("conversation", {
+      speculativePromise = specialistFactory.spawnSpecialist(
+        "conversation",
+        {
           id: `spec_conv_${Date.now()}`,
           title: "Speculative Response",
-          description: taskDescription
-       }, { model: chosenModel });
+          description: taskDescription,
+        },
+        { model: chosenModel },
+      );
     }
 
     // Wait for Planner (primary decision maker)
@@ -418,35 +435,77 @@ Your Goal: Provide a friendly, natural response to the user.
       try {
         const specResult = await speculativePromise;
         if (specResult.success && specResult.result?.content) {
-          console.log(`[server] Speculative HIT! Saved ${Date.now() - startSpeculation}ms (approx)`);
-          
+          console.log(
+            `[server] Speculative HIT! Saved ${Date.now() - startSpeculation}ms (approx)`,
+          );
+
           // Use the speculative content directly
           result = {
             type: "conversation",
-            content: specResult.result.content
+            content: specResult.result.content,
           };
-          
+
           // Log it as fully processed
           logger.logOrchestrator("ROUTE", {
-             decision: "CONVERSATION_SPECULATIVE",
-             reason: "Planner confirmed conversation, using speculative result"
+            decision: "CONVERSATION_SPECULATIVE",
+            reason: "Planner confirmed conversation, using speculative result",
           });
         } else {
-           // Speculation failed, fall back to normal processing
-           console.log("[server] Speculative execution failed, falling back to orchestrator");
-           result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+          // Speculation failed, fall back to normal processing
+          console.log(
+            "[server] Speculative execution failed, falling back to orchestrator",
+          );
+          result = await orchestrator.process(plan, {
+            model: chosenModel,
+            userMessage: userMsg,
+            onTaskTreeUpdate: (data) => {
+              console.log(
+                "[server] Task tree update:",
+                JSON.stringify(data.stats),
+              );
+            },
+          });
         }
       } catch (e) {
-         console.warn("[server] Speculative promise error:", e);
-         result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+        console.warn("[server] Speculative promise error:", e);
+        result = await orchestrator.process(plan, {
+          model: chosenModel,
+          userMessage: userMsg,
+          onTaskTreeUpdate: (data) => {
+            console.log(
+              "[server] Task tree update:",
+              JSON.stringify(data.stats),
+            );
+          },
+          onTaskTreeUpdate: (data) => {
+            console.log(
+              "[server] Task tree update:",
+              JSON.stringify(data.stats),
+            );
+          },
+        });
       }
     } else {
       // Planner needs tools OR speculation wasn't started
       if (speculativePromise) {
-        console.log("[server] Speculative DISCARD. Planner requires tools/actions.");
+        console.log(
+          "[server] Speculative DISCARD. Planner requires tools/actions.",
+        );
         // We just ignore the speculative promise, let it finish in background (or it gets GC'd)
       }
-      result = await orchestrator.process(plan, { model: chosenModel, userMessage: userMsg });
+
+      // Add task tree update callback for WebSocket/SSE communication
+      const options = {
+        model: chosenModel,
+        userMessage: userMsg,
+        onTaskTreeUpdate: (data) => {
+          // Send task tree updates to client via response
+          // This could be enhanced to use WebSocket for real-time updates
+          console.log("[server] Task tree update:", JSON.stringify(data.stats));
+        },
+      };
+
+      result = await orchestrator.process(plan, options);
     }
     // --- Speculative Execution End ---
 
@@ -469,13 +528,43 @@ Your Goal: Provide a friendly, natural response to the user.
 
     // If there are todos (Phase 1 - waiting for approval), format them into the response
     if (result.todos && result.todos.length > 0) {
-      const todoList = result.todos
-        .map(
-          (todo, i) =>
-            `${i + 1}. ${todo.description || todo.content} [${todo.status}]`,
-        )
-        .join("\n");
-      responseText = `**Todo List:**\n${todoList}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
+      // If we have a task tree, show it hierarchically
+      if (result.taskTree) {
+        const formatTaskTree = (tasks, level = 0) => {
+          return tasks
+            .map((task) => {
+              const indent = "  ".repeat(level);
+              const agentBadge = task.assigned_worker
+                ? ` [@${task.assigned_worker}]`
+                : "";
+              const depBadge =
+                task.dependencies && task.dependencies.length > 0
+                  ? ` (depends: ${task.dependencies.join(", ")})`
+                  : "";
+              let lines = [
+                `${indent}• ${task.content}${agentBadge}${depBadge}`,
+              ];
+
+              if (task.subtasks && task.subtasks.length > 0) {
+                lines.push(...formatTaskTree(task.subtasks, level + 1));
+              }
+              return lines;
+            })
+            .flat();
+        };
+
+        const taskTreeLines = formatTaskTree(result.taskTree);
+        responseText = `**Task Tree:**\n${taskTreeLines.join("\n")}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
+      } else {
+        // Fallback to old todo list format
+        const todoList = result.todos
+          .map(
+            (todo, i) =>
+              `${i + 1}. ${todo.description || todo.content} [${todo.status}]${todo.assigned_agent ? ` [@${todo.assigned_agent}]` : ""}`,
+          )
+          .join("\n");
+        responseText = `**Todo List:**\n${todoList}\n\nPlease review and respond with 'yes' to proceed or 'no' to cancel.`;
+      }
 
       // Store plan for Phase 2 detection (separate from conversation history to avoid breaking Ollama)
       lastPlanBySession.set(sessionId, plan);
@@ -483,20 +572,23 @@ Your Goal: Provide a friendly, natural response to the user.
 
     // If there are task results (Phase 2 - execution complete), include them
     if (result.results && result.results.length > 0) {
-      if (result.content && result.content !== "Executing the approved plan...") {
-         // Use the conversational synthesis provided by Orchestrator
-         responseText = result.content;
+      if (
+        result.content &&
+        result.content !== "Executing the approved plan..."
+      ) {
+        // Use the conversational synthesis provided by Orchestrator
+        responseText = result.content;
       } else {
-         // Fallback: detailed summary from specialist responses
-         const taskDetails = result.results
-           .map((r, i) => {
-             const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
-             const content = r.result?.content || r.message || "";
-             const error = r.error ? `\nError: ${r.error}` : "";
-             return `**Task ${i + 1}** [${status}]\n${content}${error}`;
-           })
-           .join("\n\n");
-         responseText = `${taskDetails}`;
+        // Fallback: detailed summary from specialist responses
+        const taskDetails = result.results
+          .map((r, i) => {
+            const status = r.success ? "✓ SUCCESS" : "✗ FAILED";
+            const content = r.result?.content || r.message || "";
+            const error = r.error ? `\nError: ${r.error}` : "";
+            return `**Task ${i + 1}** [${status}]\n${content}${error}`;
+          })
+          .join("\n\n");
+        responseText = `${taskDetails}`;
       }
 
       // Clear last plan after execution

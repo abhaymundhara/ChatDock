@@ -294,6 +294,43 @@ class Planner {
   }
 
   /**
+   * Build task tree from tool calls with dependencies
+   * @param {Array} taskCalls - Task tool calls
+   * @returns {Object|null} Task tree structure
+   */
+  buildTaskTreeFromCalls(taskCalls) {
+    if (!taskCalls || taskCalls.length === 0) {
+      return null;
+    }
+
+    const taskTree = require("./task-tree");
+
+    // Parse each tool call to extract task info
+    const tasks = taskCalls.map((tc, index) => {
+      const args = this.parseArgs(tc.function.arguments);
+      return {
+        id: `task_${index + 1}`,
+        task_description: args.task_description,
+        agent_type: args.agent_type,
+        context: args.context,
+        depends_on: args.depends_on || [],
+      };
+    });
+
+    // Build and return the task tree
+    return taskTree.buildTaskTree(tasks);
+  }
+
+  /**
+   * Parse tool arguments (handle string or object)
+   * @param {string|Object} args
+   * @returns {Object}
+   */
+  parseArgs(args) {
+    return typeof args === "string" ? JSON.parse(args) : args;
+  }
+
+  /**
    * Analyze user request and generate task plan
    * @param {Array<{role: string, content: string}>} conversationHistory - Full conversation history
    * @param {Object} options
@@ -447,7 +484,8 @@ class Planner {
     if (this.needsToolUse(userText)) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.role === "user") {
-        lastMsg.content += "\n\n[SYSTEM HINT]: Your request implies a file, shell, or search operation. You MUST use the `todo_write` tool. Do NOT respond with pure conversation.";
+        lastMsg.content +=
+          "\n\n[SYSTEM HINT]: Your request implies a file, shell, or search operation. You MUST use the `todo_write` tool. Do NOT respond with pure conversation.";
         console.log("[planner] Injected system hint to force tool usage");
       }
     }
@@ -524,10 +562,18 @@ class Planner {
       ).length;
       console.log(`[planner]   - Todo calls: ${todoCount}`);
       console.log(`[planner]   - Task (subagent) calls: ${taskCount}`);
+
+      // Parse task dependencies from tool calls
+      const taskCalls = response.tool_calls.filter(
+        (tc) => tc.function?.name === "task",
+      );
+      const taskTree = this.buildTaskTreeFromCalls(taskCalls);
+
       return {
         type: "task",
         content: response.content || "",
         tool_calls: response.tool_calls,
+        taskTree, // Include task tree structure
       };
     }
 
