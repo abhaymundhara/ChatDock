@@ -6,18 +6,14 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
-const { loadSettings } = require("./utils/settings-store");
-const {
-  tools,
-  toolExecutors,
-  initializeToolEmbeddings,
-  filterToolsForMessage,
-} = require("./tools/registry");
+
+// Multi-agent orchestration
+const { Planner } = require("./orchestrator/planner");
+const { Orchestrator } = require("./orchestrator/orchestrator");
 
 const {
   port: PORT,
   host: HOST,
-  userDataPath: USER_DATA,
   lastModelPath: LAST_MODEL_PATH,
 } = getServerConfig();
 
@@ -108,12 +104,6 @@ function loadBrainContext() {
 
 const BRAIN_CONTEXT = loadBrainContext();
 console.log("[server] Loaded brain context (SOUL.md)");
-console.log(`[server] Loaded ${tools.length} tools`);
-
-// Initialize tool embeddings at startup
-(async () => {
-  await initializeToolEmbeddings();
-})();
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -195,187 +185,148 @@ app.get("/tools", (_req, res) => {
   });
 });
 
-/* Chat (streaming) */
-app.post("/chat", async (req, res) => {
+/* Multi-agent chat endpoint (Phase 1-2 testing) */
+app.post("/chat/agent", async (req, res) => {
   try {
     const userMsg = String(req.body?.message ?? "");
     const requestedModel = req.body?.model ? String(req.body.model) : "";
-    const sessionId = req.body?.sessionId || "default"; // Support session IDs
+    const sessionId = req.body?.sessionId || "default";
+
     const lastModel = loadLastModel();
-    let availableModels = [];
-
-    if (!requestedModel && !lastModel) {
-      try {
-        const upstreamTags = await fetch(`${OLLAMA_BASE}/api/tags`, {
-          method: "GET",
-        });
-        const data = upstreamTags.ok
-          ? await upstreamTags.json().catch(() => ({}))
-          : {};
-        availableModels = Array.isArray(data.models)
-          ? data.models.map((m) => m.name).filter(Boolean)
-          : [];
-      } catch {
-        availableModels = [];
-      }
-    }
-
     const chosenModel = chooseModel({
       requested: requestedModel,
       last: lastModel,
-      available: availableModels,
+      available: [],
     });
 
     if (!chosenModel) {
       return res.status(400).json({
         error: "No model available. Install a model with Ollama and try again.",
-        availableModels,
       });
     }
 
-    if (requestedModel && requestedModel !== lastModel) {
-      saveLastModel(requestedModel);
-    } else if (!lastModel && chosenModel) {
-      saveLastModel(chosenModel);
-    }
-
-    const settings = loadSettings(process.env.USER_DATA_PATH || __dirname);
-
-    // Build system prompt with brain context and daily logs
-    const dailyLogs = loadDailyLogs();
-    let systemPrompt = BRAIN_CONTEXT;
-    if (dailyLogs) {
-      systemPrompt += `\n\n---\n\n# Memory Context\n\n${dailyLogs}`;
-    }
-    if (settings.systemPrompt) {
-      systemPrompt += `\n\n## Additional Instructions\n${settings.systemPrompt}`;
-    }
-
-    const temperature =
-      typeof settings.temperature === "number" ? settings.temperature : 0.7;
-
-    // Get or create conversation history for this session
+    // Get or create conversation history
     if (!conversationHistory.has(sessionId)) {
       conversationHistory.set(sessionId, []);
     }
     const history = conversationHistory.get(sessionId);
 
-    // Add user message to history
+    // Add user message
     history.push({ role: "user", content: userMsg });
 
-    // Keep only last 20 messages to avoid context overflow
+    // Create planner and orchestrator
+    const planner = new Planner({ model: chosenModel });
+    const orchestrator = new Orchestrator({ model: chosenModel });
+
+    // Step 1: Planner analyzes intent
+    console.log("[agent] Planner analyzing request...");
+    const plan = await planner.plan(history, { model: chosenModel });
+    console.log("[agent] Planner result:", plan.type);
+
+    // Step 2: Orchestrator processes plan (handles conversation, clarification, and task spawning)
+    const result = await orchestrator.process(plan, { model: chosenModel });
+
+    // Add assistant response to history
+    history.push({ role: "assistant", content: result.content });
+
+    // Keep only last 20 messages
     if (history.length > 20) {
       history.splice(0, history.length - 20);
     }
 
-    // Tool calling loop - keep calling until we get a final response
-    let finalResponse = "";
-    let toolCallCount = 0;
-    const maxToolCalls = 10; // Prevent infinite loops
+    // Append to daily log
+    appendToTodayLog(userMsg, result.content);
 
-    // Server-side tool filtering for efficiency
-    // Support both formats: { message: "..." } from Electron and { messages: [...] } from API
-    const userMessage =
-      userMsg ||
-      req.body.messages?.[req.body.messages.length - 1]?.content ||
-      "";
-    const startTime = Date.now();
-    const availableTools = filterToolsForMessage(userMessage);
-    console.log(`[server] Tool filtering took ${Date.now() - startTime}ms`);
+    // Return result
+    return res.json({
+      response: result.content,
+      type: result.type,
+      model: chosenModel,
+      ...(result.todos && { todos: result.todos }),
+      ...(result.results && { results: result.results }),
+      ...(result.summary && { summary: result.summary }),
+      ...(result.question && { question: result.question }),
+      ...(result.options && { options: result.options }),
+    });
+  } catch (error) {
+    console.error("[agent] Error:", error);
+    return res.status(500).json({
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
 
-    while (toolCallCount < maxToolCalls) {
-      const llmStartTime = Date.now();
-      const upstream = await fetch(`${OLLAMA_BASE}/api/chat`, {
-        body: JSON.stringify({
-          model: chosenModel,
-          stream: false, // Use non-streaming for tool calling
-          messages: [{ role: "system", content: systemPrompt }, ...history],
-          tools: availableTools, // Filtered tools based on user message
-          options: { temperature },
-        }),
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+/* Chat (streaming) - Now uses multi-agent architecture */
+app.post("/chat", async (req, res) => {
+  try {
+    const userMsg = String(req.body?.message ?? "");
+    console.log("[chat] Received message:", userMsg);
+    const requestedModel = req.body?.model ? String(req.body.model) : "";
+    const sessionId = req.body?.sessionId || "default";
+    const lastModel = loadLastModel();
+
+    const chosenModel = chooseModel({
+      requested: requestedModel,
+      last: lastModel,
+      available: [],
+    });
+
+    if (!chosenModel) {
+      return res.status(400).json({
+        error: "No model available. Install a model with Ollama and try again.",
       });
-
-      if (!upstream.ok) {
-        res
-          .status(502)
-          .end(`Upstream error: ${upstream.status} ${upstream.statusText}`);
-        return;
-      }
-
-      const data = await upstream.json();
-      const message = data?.message;
-      console.log(`[server] LLM inference took ${Date.now() - llmStartTime}ms`);
-
-      if (!message) {
-        res.status(502).end("Invalid response from Ollama");
-        return;
-      }
-
-      // Check if model wants to use tools
-      if (message.tool_calls && message.tool_calls.length > 0) {
-        toolCallCount++;
-        console.log(
-          `[server] Processing ${message.tool_calls.length} tool call(s)`,
-        );
-
-        // Add assistant's tool call to history
-        history.push({
-          role: "assistant",
-          content: message.content || "",
-          tool_calls: message.tool_calls,
-        });
-
-        // Execute each tool
-        for (const toolCall of message.tool_calls) {
-          const toolName = toolCall.function?.name;
-          const toolArgs = toolCall.function?.arguments || {};
-
-          const toolStartTime = Date.now();
-          console.log(`[server] Executing tool: ${toolName}`, toolArgs);
-
-          let result;
-          if (toolExecutors[toolName]) {
-            try {
-              result = await toolExecutors[toolName](toolArgs);
-              console.log(
-                `[server] Tool ${toolName} executed in ${Date.now() - toolStartTime}ms`,
-              );
-            } catch (error) {
-              result = { success: false, error: error.message };
-            }
-          } else {
-            result = { success: false, error: `Unknown tool: ${toolName}` };
-          }
-
-          // Add tool result to history
-          history.push({
-            role: "tool",
-            content: JSON.stringify(result),
-            tool_name: toolName,
-          });
-        }
-
-        // Continue loop to get final response
-        continue;
-      }
-
-      // No tool calls - we have the final response
-      finalResponse = message.content || "";
-      history.push({ role: "assistant", content: finalResponse });
-      break;
     }
 
-    // Send response to client
+    if (requestedModel && requestedModel !== lastModel) {
+      saveLastModel(requestedModel);
+    }
+
+    // Get or create conversation history
+    if (!conversationHistory.has(sessionId)) {
+      conversationHistory.set(sessionId, []);
+    }
+    const history = conversationHistory.get(sessionId);
+    history.push({ role: "user", content: userMsg });
+
+    // Keep only last 20 messages
+    if (history.length > 20) {
+      history.splice(0, history.length - 20);
+    }
+
+    // Use multi-agent architecture
+    console.log("[chat] Using multi-agent: Planner → Orchestrator");
+    const planner = new Planner({ model: chosenModel });
+    const orchestrator = new Orchestrator({ model: chosenModel });
+
+    const plan = await planner.plan(history, { model: chosenModel });
+    const result = await orchestrator.process(plan, { model: chosenModel });
+
+    // Handle clarification responses
+    if (result.type === "clarification") {
+      const questionText = `${result.question}\n\nOptions:\n${result.options?.map((opt, i) => `${i + 1}. ${opt.label}: ${opt.description}`).join("\n") || "No options provided"}`;
+
+      history.push({ role: "assistant", content: questionText });
+      appendToTodayLog(userMsg, questionText);
+
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.write(questionText);
+      res.end();
+      return;
+    }
+
+    // Handle normal responses
+    history.push({ role: "assistant", content: result.content });
+    appendToTodayLog(userMsg, result.content);
+
+    // Send as text for backward compatibility with UI
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
-    res.write(finalResponse);
+    res.write(result.content);
     res.end();
-
-    // Save to daily log
-    appendToTodayLog(userMsg, finalResponse);
   } catch (err) {
+    console.error("[chat] Error:", err);
     res.status(500).end("Server error: " + (err?.message || String(err)));
   }
 });
