@@ -12,8 +12,6 @@
 </head>
 
 <body>
-  <!-- Drag handle removed in favor of whole-bar dragging via CSS -->
-
   <div class="ace-bar" id="aceBar">
     <!-- Input Row (Always Visible) -->
     <div class="input-row">
@@ -25,7 +23,7 @@
         </svg>
       </div>
 
-      <input type="text" class="bar-input" id="chatInput" placeholder="Type a command or ask a question..."
+      <input type="text" class="bar-input" id="chatInput" placeholder="Ask anything..."
         autocomplete="off" autofocus />
 
       <div class="bar-actions">
@@ -49,12 +47,6 @@
 
     <!-- Expanded Content -->
     <div class="expanded-content" id="expandedList">
-      <div class="workflow-strip" id="workflowStrip" style="display: none">
-        <div class="workflow-steps" id="workflowSteps"></div>
-      </div>
-      <div class="tasks-strip" id="tasksStrip" style="display: none">
-        <div class="tasks-list" id="tasksList"></div>
-      </div>
       <div class="messages-list" id="messagesList"></div>
     </div>
   </div>
@@ -77,10 +69,6 @@
     const chatInput = document.getElementById("chatInput");
     const expandedList = document.getElementById("expandedList");
     const messagesList = document.getElementById("messagesList");
-    const workflowStrip = document.getElementById("workflowStrip");
-    const workflowSteps = document.getElementById("workflowSteps");
-    const tasksStrip = document.getElementById("tasksStrip");
-    const tasksList = document.getElementById("tasksList");
     const mainIcon = document.getElementById("mainIcon");
     const statusBadge = document.getElementById("statusBadge");
     const settingsBtn = document.getElementById("settingsBtn");
@@ -91,26 +79,13 @@
     let currentModels = [];
     let currentModel = "";
     let selectedCommandIndex = 0;
-    let currentTasks = [];
-    let currentDependencies = {};
-    let conversationHistory = []; // Track conversation for context
-    const WORKFLOW_STEPS = [
-      { key: "tasks", label: "Tasks" },
-      { key: "tool_finder", label: "ToolFinder" },
-      { key: "tool_call", label: "Tool Call" },
-    ];
-    const WORKFLOW_STATUSES = ["pending", "active", "complete"];
-    const PLANNING_TOOLS = new Set(["task_write", "think", "ask_user"]);
-    let workflowState = WORKFLOW_STEPS.reduce((acc, step) => {
-      acc[step.key] = "pending";
-      return acc;
-    }, {});
+    let conversationHistory = []; 
 
     // ===== Available Commands =====
     const COMMANDS = [
-      { name: "/help", description: "Show available commands", icon: "❓" },
       { name: "/model", description: "Switch AI model", icon: "🤖" },
       { name: "/clear", description: "Clear conversation", icon: "🗑️" },
+      { name: "/help", description: "Show help", icon: "❓" },
     ];
 
     // ===== Initial Setup =====
@@ -139,13 +114,11 @@
 
     function setThinking(thinking) {
       isProcessing = thinking;
-
       if (thinking) {
         mainIcon.classList.add("loading");
         mainIcon.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 4V2M12 20v2M4 12H2m20 0h-2m-2.05-5.95l-1.41-1.41M5.46 19.95l-1.41-1.41M18.54 18.54l1.41 1.41M5.46 4.05l-1.41 1.41" stroke="currentColor" stroke-width="2" fill="none"/></svg>`;
         statusBadge.style.display = "flex";
-        statusBadge.innerText = "Working...";
-        statusBadge.classList.remove("completed");
+        statusBadge.innerText = "Thinking...";
         settingsBtn.style.display = "none";
       } else {
         mainIcon.classList.remove("loading");
@@ -163,190 +136,8 @@
       }
     }
 
-    const TASK_STATUSES = ["pending", "in_progress", "blocked", "completed"];
-    const TASK_STATUS_ICONS = {
-      pending: "○",
-      in_progress: "◐",
-      blocked: "⚠",
-      completed: "✓",
-    };
-
-    function hasTasks() {
-      return currentTasks.length > 0;
-    }
-
-    function resetWorkflow() {
-      workflowState = WORKFLOW_STEPS.reduce((acc, step) => {
-        acc[step.key] = "pending";
-        return acc;
-      }, {});
-      renderWorkflow();
-    }
-
-    function updateWorkflow(stepKey, status) {
-      if (!workflowState[stepKey]) return;
-      if (!WORKFLOW_STATUSES.includes(status)) return;
-      workflowState[stepKey] = status;
-      renderWorkflow();
-    }
-
-    function renderWorkflow() {
-      const hasProgress = WORKFLOW_STEPS.some(
-        (step) => workflowState[step.key] !== "pending",
-      );
-
-      if (!hasProgress) {
-        workflowStrip.style.display = "none";
-        return;
-      }
-
-      workflowStrip.style.display = "block";
-      workflowSteps.innerHTML = "";
-
-      WORKFLOW_STEPS.forEach((step) => {
-        const status = workflowState[step.key];
-        const stepEl = document.createElement("div");
-        stepEl.className = "workflow-step";
-        if (status === "active") stepEl.classList.add("is-active");
-        if (status === "complete") stepEl.classList.add("is-complete");
-
-        const tick = document.createElement("span");
-        tick.className = "step-tick";
-        tick.textContent = status === "complete" ? "✓" : "";
-
-        const label = document.createElement("span");
-        label.className = "step-label";
-        label.textContent = step.label;
-
-        stepEl.appendChild(tick);
-        stepEl.appendChild(label);
-        workflowSteps.appendChild(stepEl);
-      });
-
-      expand(true);
-    }
-
-    function updateTaskState(taskId, updates) {
-      const idx = currentTasks.findIndex((task) => task.id === taskId);
-      if (idx === -1) return;
-      currentTasks[idx] = { ...currentTasks[idx], ...updates };
-    }
-
-    async function persistTaskUpdate(task, row) {
-      // Task persistence removed - simplified version doesn't have task management
-      console.log("Task update:", task);
-      return true;
-    }
-
-    function renderTasks() {
-      if (!hasTasks()) {
-        tasksStrip.style.display = "none";
-        return;
-      }
-
-      tasksStrip.style.display = "block";
-      tasksList.innerHTML = "";
-
-      // Calculate progress (Claude Cowork-style visibility)
-      const completedCount = currentTasks.filter(
-        (t) => t.status === "completed",
-      ).length;
-      const totalCount = currentTasks.length;
-      const inProgressTask = currentTasks.find(
-        (t) => t.status === "in_progress",
-      );
-
-      // Add progress indicator if we have tasks
-      if (totalCount > 0) {
-        const progressBar = document.createElement("div");
-        progressBar.className = "task-progress-bar";
-        progressBar.innerHTML = `
-            <div class="task-progress-fill" style="width: ${(completedCount / totalCount) * 100}%"></div>
-            <div class="task-progress-text">${completedCount}/${totalCount} completed</div>
-          `;
-        tasksList.appendChild(progressBar);
-      }
-
-      currentTasks.forEach((task) => {
-        const dependsOn =
-          task.dependsOn || currentDependencies[task.id] || [];
-        const status = task.status || "pending";
-        const title = task.task || task.title || "";
-
-        const row = document.createElement("div");
-        row.className = "task-row";
-        row.dataset.taskId = task.id;
-
-        // Highlight in-progress task prominently (Claude Cowork-style)
-        if (status === "in_progress") {
-          row.classList.add("task-active");
-        }
-
-        const statusBtn = document.createElement("button");
-        statusBtn.className = `task-status status-${status}`;
-        statusBtn.dataset.status = status;
-        statusBtn.type = "button";
-        statusBtn.title = status.replace("_", " ");
-        statusBtn.textContent = TASK_STATUS_ICONS[status] || "○";
-
-        statusBtn.addEventListener("click", async () => {
-          const currentStatus = statusBtn.dataset.status || "pending";
-          const currentIndex = TASK_STATUSES.indexOf(currentStatus);
-          const nextStatus =
-            TASK_STATUSES[(currentIndex + 1) % TASK_STATUSES.length];
-          updateTaskState(task.id, { status: nextStatus });
-          statusBtn.className = `task-status status-${nextStatus}`;
-          statusBtn.textContent = TASK_STATUS_ICONS[nextStatus];
-          statusBtn.title = nextStatus.replace("_", " ");
-          statusBtn.dataset.status = nextStatus;
-          await persistTaskUpdate({ id: task.id, status: nextStatus }, row);
-        });
-
-        const titleEl = document.createElement("div");
-        titleEl.className = "task-title";
-        titleEl.textContent = title;
-        titleEl.dataset.original = title;
-        titleEl.contentEditable = "true";
-        titleEl.spellcheck = false;
-
-        titleEl.addEventListener("keydown", (event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            titleEl.blur();
-          }
-        });
-
-        titleEl.addEventListener("blur", async () => {
-          const nextTitle = titleEl.textContent.trim();
-          if (!nextTitle || nextTitle === titleEl.dataset.original) return;
-          updateTaskState(task.id, { task: nextTitle });
-          await persistTaskUpdate({ id: task.id, task: nextTitle }, row);
-          titleEl.dataset.original = nextTitle;
-        });
-
-        const depsEl = document.createElement("div");
-        depsEl.className = "task-deps";
-        if (dependsOn.length > 0) {
-          depsEl.textContent = `↳ ${dependsOn.length} deps`;
-        } else {
-          depsEl.style.display = "none";
-        }
-
-        row.appendChild(statusBtn);
-        row.appendChild(titleEl);
-        row.appendChild(depsEl);
-        tasksList.appendChild(row);
-      });
-
-      expand(true);
-    }
-
     function showCommandPalette(filter = "") {
-      // Check if we're typing /model specifically
-      if (
-        filter.toLowerCase() === "model" ||
-        filter.toLowerCase() === "models"
-      ) {
+      if (filter.toLowerCase().startsWith("model")) {
         showModelSelector();
         return;
       }
@@ -380,39 +171,35 @@
       setTimeout(() => commandPalette.classList.add("visible"), 10);
       expand(true);
 
-      // Add click handlers
       commandPalette.querySelectorAll(".command-item").forEach((item) => {
         item.addEventListener("click", () => {
           chatInput.value = item.dataset.command;
           hideCommandPalette();
-          chatInput.focus();
-          sendMessage();
+          if (item.dataset.command === "/model") {
+            showModelSelector();
+          } else {
+            sendMessage();
+          }
         });
       });
     }
 
     function showModelSelector() {
       if (currentModels.length === 0) {
-        commandPalette.innerHTML =
-          '<div class="command-item"><div class="command-info"><div class="command-desc">Loading models...</div></div></div>';
+        commandPalette.innerHTML = '<div class="command-item"><div class="command-info"><div class="command-desc">No models found...</div></div></div>';
         commandPalette.style.display = "block";
         setTimeout(() => commandPalette.classList.add("visible"), 10);
-        expand(true);
         return;
       }
 
       commandPalette.innerHTML = `
         <div class="model-list">
-          ${currentModels
-          .map(
-            (model) => `
+          ${currentModels.map(model => `
             <div class="model-item ${model === currentModel ? "active" : ""}" data-model="${model}">
               <span>${model}</span>
               ${model === currentModel ? '<span class="checkmark">✓</span>' : ""}
             </div>
-          `,
-          )
-          .join("")}
+          `).join("")}
         </div>
       `;
 
@@ -420,36 +207,19 @@
       setTimeout(() => commandPalette.classList.add("visible"), 10);
       expand(true);
 
-      // Add click handlers for model selection
       commandPalette.querySelectorAll(".model-item").forEach((item) => {
         item.addEventListener("click", async () => {
           const selectedModel = item.dataset.model;
           currentModel = selectedModel;
-
-          // Save to server
-          try {
-            await fetch(`${CHAT_BASE}/models/selected`, {
-              method: "POST",
-              headers: {
-                ...getAuthHeaders(),
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ model: selectedModel }),
-            });
-          } catch (e) {
-            console.error("Failed to save model:", e);
-          }
-
-          // Update UI
+          await fetch(`${CHAT_BASE}/models/selected`, {
+            method: "POST",
+            headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ model: selectedModel }),
+          });
           chatInput.value = "";
           hideCommandPalette();
           messagesList.innerHTML = "";
           addMessage(`Switched to model: ${selectedModel}`, "assistant");
-
-          setTimeout(() => {
-            messagesList.innerHTML = "";
-            expand(false);
-          }, 2000);
         });
       });
     }
@@ -459,292 +229,131 @@
       setTimeout(() => {
         commandPalette.style.display = "none";
         commandPalette.innerHTML = "";
-      }, 250); // Match CSS transition duration
+      }, 250);
       selectedCommandIndex = 0;
     }
 
-    function addToolItem(name) {
-      expand(true);
-      const item = document.createElement("div");
-      item.className = "tool-item";
-      item.innerHTML = `
-        <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.03-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
-        <span>Running ${name}...</span>
-      `;
-      messagesList.insertBefore(item, messagesList.firstChild);
-      return item;
-    }
-
-    function addMessage(text, type = "assistant", isPreformatted = false) {
+    function addMessage(text, type = "assistant") {
       expand(true);
       const msg = document.createElement("div");
       msg.className = `message ${type}`;
-
-      let safe;
-
-      if (isPreformatted) {
-        // Content is already HTML-formatted, use as-is
-        safe = text;
-      } else {
-        // 1. Escape HTML first to prevent XSS from user content
-        safe = escapeHtml(text);
-
-        // 2. Apply Markdown Formatting (Simple)
-        // Bold
-        safe = safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-        // Inline Code
-        safe = safe.replace(/`(.*?)`/g, "<code>$1</code>");
-        // Tables (Simple row conversion) | col | col |
-        if (safe.includes("|")) {
-          const lines = safe.split("\n");
-          let inTable = false;
-          safe = lines
-            .map((line) => {
-              if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-                const cells = line.split("|").filter((c) => c.trim() !== "");
-                const isHeader = line.includes("---");
-                if (isHeader) return ""; // Skip separator lines
-
-                const htmlCells = cells
-                  .map((c) => (isHeader ? `<th>${c}</th>` : `<td>${c}</td>`))
-                  .join("");
-
-                if (!inTable) {
-                  inTable = true;
-                  return `<table class="md-table"><tr>${htmlCells}</tr>`;
-                }
-                return `<tr>${htmlCells}</tr>`;
-              } else {
-                if (inTable) {
-                  inTable = false;
-                  return `</table><br>${line}`;
-                }
-                return line;
-              }
-            })
-            .join("\n");
-          if (inTable) safe += "</table>";
-        }
-
-        // Newlines
-        safe = safe.replace(/\n/g, "<br>");
-      }
+      
+      let safe = escapeHtml(text)
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+        .replace(/`(.*?)`/g, "<code>$1</code>")
+        .replace(/\n/g, "<br>");
 
       msg.innerHTML = `<div class="message-content">${safe}</div>`;
       messagesList.appendChild(msg);
       expandedList.scrollTop = expandedList.scrollHeight;
+      return msg;
     }
 
-    function addOrUpdateMessage(type, text) {
-      // Check if we already have a message of this type as the last one
+    function updateLastAssistantMessage(text) {
       const lastMsg = messagesList.lastElementChild;
-
-      if (lastMsg && lastMsg.classList.contains(type)) {
-        // Update existing message
+      if (lastMsg && lastMsg.classList.contains("assistant")) {
         const content = lastMsg.querySelector(".message-content");
-        if (content) {
-          // Escape HTML and apply basic markdown
-          let safe = escapeHtml(text);
-          safe = safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-          safe = safe.replace(/`(.*?)`/g, "<code>$1</code>");
-          safe = safe.replace(/\n/g, "<br>");
-          content.innerHTML = safe;
-        }
+        let safe = escapeHtml(text)
+          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+          .replace(/`(.*?)`/g, "<code>$1</code>")
+          .replace(/\n/g, "<br>");
+        content.innerHTML = safe;
       } else {
-        // Create new message
-        addMessage(text, type);
+        addMessage(text, "assistant");
       }
       expandedList.scrollTop = expandedList.scrollHeight;
     }
 
     function escapeHtml(text) {
       if (!text) return "";
-      return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
     }
 
-    // ===== Slash Commands =====
-    async function handleSlashCommand(cmd) {
-      const parts = cmd.slice(1).split(" ");
-      const command = parts[0].toLowerCase();
-
-      if (command === "model" || command === "models") {
-        // Model switching is now handled in the palette
-        showModelSelector();
-        return true;
-      }
-
-      if (command === "help") {
-        expand(true);
-        messagesList.innerHTML = "";
-        addMessage(
-          `Available commands:\n\n` +
-          `• /model - Switch AI model\n` +
-          `• /clear - Clear conversation\n` +
-          `• /help - Show this help\n\n` +
-          `Simply type your question or message to chat!`,
-          "assistant",
-        );
-        return true;
-      }
-
-      if (command === "clear") {
-        messagesList.innerHTML = "";
-        conversationHistory = []; // Clear conversation history
-        currentTasks = []; // Clear tasks
-        renderTasks();
-        expand(false);
-        return true;
-      }
-
-      if (command === "help") {
-        expand(true);
-        messagesList.innerHTML = "";
-        addMessage(
-          `Available commands:\n\n/model - Switch AI model\n/tools - List available tools\n/skills - List available skills\n/clear - Clear conversation\n/help - Show this help`,
-          "assistant",
-        );
-        return true;
-      }
-
-      return false;
-    }
-
-    // ===== Chat Logic =====
     async function sendMessage() {
       const text = chatInput.value.trim();
       if (!text || isProcessing) return;
 
-      // Handle slash commands
       if (text.startsWith("/")) {
         chatInput.value = "";
         hideCommandPalette();
-        const handled = await handleSlashCommand(text);
-        if (handled) return;
+        if (text === "/clear") {
+          messagesList.innerHTML = "";
+          expand(false);
+        } else if (text === "/model") {
+          showModelSelector();
+        } else if (text === "/help") {
+          addMessage("Available commands:\n/model - Switch AI model\n/clear - Clear chat\n/help - Show this help", "assistant");
+        }
+        return;
       }
 
       setThinking(true);
-      resetWorkflow();
       expand(true);
       hideCommandPalette();
-
-      // Clear previous messages - only show current query/response
+      
+      // Clear previous messages to show ONLY the latest agent message
       messagesList.innerHTML = "";
-
-      // Add user message to UI and history
-      addMessage(text, "user");
-      conversationHistory.push({ role: "user", content: text });
-
+      
       chatInput.value = "";
-      chatInput.placeholder = "";
 
       try {
-        // Use the simple chat endpoint with streaming
         const response = await fetch(`${CHAT_BASE}/chat`, {
           method: "POST",
-          headers: {
-            ...getAuthHeaders(),
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            message: text,
-            model: currentModel,
-          }),
+          headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, model: currentModel }),
         });
 
-        if (!response.ok) {
-          throw new Error(`Server error: ${response.status}`);
-        }
+        if (!response.ok) throw new Error(`Server error: ${response.status}`);
 
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let assistantMsg = "";
+        addMessage("", "assistant"); // Placeholder for streaming
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          assistantMsg += chunk;
-          addOrUpdateMessage("assistant", assistantMsg);
+          assistantMsg += decoder.decode(value, { stream: true });
+          updateLastAssistantMessage(assistantMsg);
         }
-
-        // Store assistant response in conversation history
-        conversationHistory.push({
-          role: "assistant",
-          content: assistantMsg,
-        });
       } catch (e) {
         addMessage("Error: " + e.message, "assistant");
-        statusBadge.innerText = "Error";
       }
-
       setThinking(false);
-      setTimeout(() => {
-        chatInput.placeholder = "Type a command or ask a question...";
-      }, 3000);
     }
 
-    // ===== Event Listeners =====
     chatInput.addEventListener("input", (e) => {
-      const value = e.target.value;
-
-      if (value.startsWith("/")) {
-        const filter = value.slice(1);
-        showCommandPalette(filter);
-      } else {
-        hideCommandPalette();
-      }
+      if (e.target.value.startsWith("/")) showCommandPalette(e.target.value.slice(1));
+      else hideCommandPalette();
     });
 
     chatInput.addEventListener("keydown", (e) => {
       const paletteVisible = commandPalette.style.display === "block";
-
       if (e.key === "Enter") {
         e.preventDefault();
         sendMessage();
       } else if (paletteVisible && e.key === "ArrowDown") {
         e.preventDefault();
         const items = commandPalette.querySelectorAll(".command-item");
-        selectedCommandIndex = Math.min(
-          selectedCommandIndex + 1,
-          items.length - 1,
-        );
+        selectedCommandIndex = Math.min(selectedCommandIndex + 1, items.length - 1);
         showCommandPalette(chatInput.value.slice(1));
       } else if (paletteVisible && e.key === "ArrowUp") {
         e.preventDefault();
         selectedCommandIndex = Math.max(selectedCommandIndex - 1, 0);
         showCommandPalette(chatInput.value.slice(1));
-      } else if (paletteVisible && e.key === "Escape") {
-        e.preventDefault();
+      } else if (e.key === "Escape") {
         hideCommandPalette();
-      } else if (paletteVisible && e.key === "Tab") {
-        e.preventDefault();
-        const items = commandPalette.querySelectorAll(".command-item");
-        if (items[selectedCommandIndex]) {
-          chatInput.value = items[selectedCommandIndex].dataset.command;
-        }
       }
     });
 
     settingsBtn.addEventListener("click", () => {
-      if (window.settingsAPI && window.settingsAPI.open) {
-        window.settingsAPI.open();
-      }
+      if (window.settingsAPI && window.settingsAPI.open) window.settingsAPI.open();
     });
 
-    // ===== Window Resizing =====
     const resizeObserver = new ResizeObserver((entries) => {
       for (let entry of entries) {
         const height = Math.ceil(entry.contentRect.height);
-        // Add buffer for shadows/padding (approx 20px)
-        if (window.windowAPI && window.windowAPI.resize) {
-          window.windowAPI.resize(700, height + 20);
-        }
+        if (window.windowAPI && window.windowAPI.resize) window.windowAPI.resize(700, height + 20);
       }
     });
     resizeObserver.observe(aceBar);
