@@ -77,8 +77,10 @@ Guidance:
 
 - write_file
   - Create or completely overwrite a file.
-  - Description MUST name the file and purpose.
-  - Example: "Create notes.md containing a daily checklist."
+  - Description MUST name the file.
+  - Use absolute paths if the user specifies folders outside the workspace (e.g. '/Users/mac/Desktop/file.md').
+  - Description MUST include the EXACT content to be written, prefixed by "content: ".
+  - Example: "Create /Users/mac/Desktop/poem.md with content: Roses are red, violets are blue."
 
 - edit_file
   - Modify part of an existing file (append, update section, etc.).

@@ -1,6 +1,7 @@
 const { getCapability, getAllCapabilities, isExecutable, isKnownType, isEnabled, enableCapability, disableCapability, setGlobalExecutionMode, getProfiles, applyProfile } = require("../capabilities/capabilityRegistry");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { getScopeName } = require("./utils");
 const { logAudit } = require("../utils/auditLogger");
 
@@ -530,7 +531,14 @@ function handlePlannerCommands(userMsg, state) {
       };
     }
 
-    // Ask for permission
+    // Ask for permission OR Auto-Execute if SAFE
+    const SAFE_TYPES = ["read_file", "write_file", "edit_file", "organize_files"];
+    if (SAFE_TYPES.includes(step.type) && enabled) {
+        // Auto-Execute Safe Step (Bypass confirmation)
+        logAudit("STEP_AUTO_EXECUTED_SAFE", { step: stepNumber, type: step.type });
+        return executeStepLogic(stepNumber, state, userMsg);
+    }
+    
     logAudit("STEP_PERMISSION_REQUESTED", { step: stepNumber, capability: step.type });
     return {
       handled: true,
@@ -1181,6 +1189,42 @@ function handlePlannerCommands(userMsg, state) {
   return { handled: false };
 }
 
+// Helper to resolve paths within workspace OR allowed home folders
+function resolveSafePath(filename, description, state) {
+    const HOME = os.homedir();
+    const ALLOWED_EXTERNAL_ROOTS = [
+        path.join(HOME, "Desktop"),
+        path.join(HOME, "Documents"),
+        path.join(HOME, "Downloads")
+    ];
+
+    let rootDir = state.WORKSPACE_ROOT;
+    if (state.currentProjectSlug) {
+        rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+    }
+
+    let targetPath = path.resolve(rootDir, filename);
+
+    // Re-routing for keywords or absolute paths
+    if (path.isAbsolute(filename)) {
+        targetPath = filename;
+    } else if (description.toLowerCase().includes("desktop") && !filename.includes("/")) {
+        targetPath = path.join(HOME, "Desktop", filename);
+    } else if (filename.startsWith("Desktop/")) {
+        targetPath = path.join(HOME, filename);
+    }
+
+    // Validation
+    const isInternal = targetPath.startsWith(rootDir);
+    const isAllowedExternal = ALLOWED_EXTERNAL_ROOTS.some(root => targetPath.startsWith(root));
+
+    if (!isInternal && !isAllowedExternal) {
+        return { error: `Access denied: Path '${targetPath}' is outside of workspace and allowed folders.` };
+    }
+
+    return { path: targetPath };
+}
+
 // Helper to run the actual logic after permission is granted
 function executeStepLogic(stepNumber, state, userMsg) {
     const plan = state.lastGeneratedPlan;
@@ -1212,8 +1256,7 @@ function executeStepLogic(stepNumber, state, userMsg) {
     
 
 
-    // --- REAL EXECUTION LOGIC STARTS HERE ---
-    
+    // --- REAL EXECUTION LOGIC STARTS HERE ---\n    
     // Handle 'read_file' execution
     if (executable && step.type === "read_file") {
       try {
@@ -1235,25 +1278,16 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        // Determine Root
-        let rootDir = state.WORKSPACE_ROOT;
-        if (state.currentProjectSlug) {
-          rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+        const resolution = resolveSafePath(filename, step.description, state);
+        if (resolution.error) {
+            return { handled: true, response: resolution.error };
         }
-
-        // Safe Path Resolution
-        const targetPath = path.resolve(rootDir, filename);
-        if (!targetPath.startsWith(rootDir)) {
-           return {
-            handled: true,
-            response: `Access denied: Path '${filename}' resolves outside of the current scope.`
-          };
-        }
+        const targetPath = resolution.path;
 
         if (!fs.existsSync(targetPath)) {
           return {
             handled: true,
-            response: `File not found: ${filename} (in ${getScopeName(state)})`
+            response: `File not found: ${filename} (resolved to ${targetPath})`
           };
         }
         
@@ -1302,31 +1336,30 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        // Determine Root
-        let rootDir = state.WORKSPACE_ROOT;
-        if (state.currentProjectSlug) {
-          rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+        const resolution = resolveSafePath(filename, step.description, state);
+        if (resolution.error) {
+            return { handled: true, response: resolution.error };
         }
-
-        // Safe Path Resolution
-        const targetPath = path.resolve(rootDir, filename);
-        if (!targetPath.startsWith(rootDir)) {
-           return {
-            handled: true,
-            response: `Access denied: Path '${filename}' resolves outside of the current scope.`
-          };
-        }
+        const targetPath = resolution.path;
 
         // Parse content: Attempt to find "content: ..." or "with content ..."
-        // Simple heuristic: everything after the last colon or "with content"
+        // Strategies: 
+        // 1. "content: <text>"
+        // 2. "write: <text>"
+        // 3. Fallback: Check if description ends with "write it" or "write its content" -> ask user?
+        
         let content = "";
         const contentMatch = step.description.match(/content[:\s]+["'`]?(.*?)["'`]?$/i) || step.description.match(/write[:\s]+["'`]?(.*?)["'`]?$/i);
         
         if (contentMatch) {
           content = contentMatch[1];
         } else {
-          // If no content specified, create empty file
-          content = ""; 
+             // Fallback heuristics
+             if (step.description.includes("write its content")) {
+                 content = "(No specific content provided in plan)";
+             } else {
+                 content = ""; // Default empty
+             }
         }
 
         // Check for overwrite unless explicitly handled (naive check for now)
@@ -1348,19 +1381,29 @@ function executeStepLogic(stepNumber, state, userMsg) {
         let historyMetadata = {};
         if (exists && !step.description.toLowerCase().includes("overwrite")) {
            // Should have caught this earlier, but just in case
+           // (Logic repeated)
         } else if (exists) {
-            historyMetadata = { operation: "overwrite", path: targetPath, previousContent: fs.readFileSync(targetPath, "utf-8") };
+           historyMetadata = { path: targetPath, operation: "overwrite", previousContent: fs.readFileSync(targetPath, "utf-8") };
         } else {
-            historyMetadata = { operation: "create", path: targetPath };
+           historyMetadata = { path: targetPath, operation: "create", previousContent: "" };
         }
 
         fs.writeFileSync(targetPath, content, "utf-8");
+        logAudit("FILE_WRITTEN", { path: targetPath }); // Reduced logging info
 
-        const historyEntry = { stepNumber, type: "write_file", metadata: historyMetadata };
+        // Track execution
+        const historyEntry = {
+            stepNumber,
+            type: "write_file",
+            metadata: historyMetadata
+        };
+
+        const relPath = path.relative(state.WORKSPACE_ROOT, targetPath);
+        const locationMsg = relPath.startsWith("..") ? targetPath : `workspace/${relPath}`;
 
         return {
           handled: true,
-          response: `**Executed Step ${stepNumber}: Wrote file '${filename}'** successfully.`,
+          response: `**Executed Step ${stepNumber}: Wrote file '${filename}'**\n*Location:* \`${locationMsg}\`\n*Content:* "${content.substring(0, 50)}${content.length > 50 ? "..." : ""}"`,
           newState: {
             ...state,
             executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber],
@@ -1392,25 +1435,16 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        // Determine Root
-        let rootDir = state.WORKSPACE_ROOT;
-        if (state.currentProjectSlug) {
-          rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+        const resolution = resolveSafePath(filename, step.description, state);
+        if (resolution.error) {
+            return { handled: true, response: resolution.error };
         }
-
-        // Safe Path Resolution
-        const targetPath = path.resolve(rootDir, filename);
-        if (!targetPath.startsWith(rootDir)) {
-           return {
-            handled: true,
-            response: `Access denied: Path '${filename}' resolves outside of the current scope.`
-          };
-        }
+        const targetPath = resolution.path;
 
         if (!fs.existsSync(targetPath)) {
           return {
             handled: true,
-            response: `File not found: ${filename} (in ${getScopeName(state)})`
+            response: `File not found for editing: ${filename} (resolved to ${targetPath})`
           };
         }
 

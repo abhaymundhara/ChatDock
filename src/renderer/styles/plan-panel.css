@@ -1,0 +1,253 @@
+/* Plan Panel Styles */
+
+.plan-panel {
+  background: rgba(30, 30, 35, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease-out;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.plan-panel.hidden {
+  display: none;
+}
+
+.plan-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.plan-title {
+  font-family: "Inter", sans-serif;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-meta {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.plan-goal {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.4;
+  margin: 4px 0 8px 0;
+  padding-left: 2px;
+}
+
+.plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-bottom: 8px;
+}
+
+.plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.plan-step.executed {
+  background: rgba(16, 185, 129, 0.1);
+  color: #6ee7b7;
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.plan-step.skipped {
+  background: rgba(100, 116, 139, 0.1);
+  color: #94a3b8;
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
+.step-id {
+  font-family: "JetBrains Mono", monospace;
+  color: #64748b;
+  min-width: 16px;
+}
+
+.step-type {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.7rem;
+  padding: 2px 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  color: #a5b4fc;
+}
+
+.plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.action-group {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-plan {
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-accept {
+  background: #10b981;
+  color: white;
+}
+
+.btn-accept:hover {
+  background: #059669;
+}
+
+.btn-reject {
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.btn-reject:hover {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.btn-edit {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.btn-edit:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.yolo-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: #94a3b8;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+
+.yolo-toggle.active {
+  color: #f59e0b;
+}
+
+.toggle-switch {
+  width: 24px;
+  height: 14px;
+  background: #334155;
+  border-radius: 7px;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.yolo-toggle.active .toggle-switch {
+  background: #f59e0b;
+}
+
+.toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.2s;
+}
+
+.yolo-toggle.active .toggle-switch::after {
+  transform: translateX(10px);
+}
+
+.locked-badge {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  border-radius: 3px;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.status-badge {
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.status-badge.proposed {
+  background: rgba(59, 130, 246, 0.1);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.status-badge.accepted {
+  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-badge.error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.plan-error {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  color: #f87171;
+  margin-bottom: 8px;
+}
+
+.plan-error.hidden {
+  display: none;
+}
+
+.status-badge.completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}

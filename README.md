@@ -1,6 +1,6 @@
-# ChatDock (Jarvis)
+# ChatDock
 
-**ChatDock** is a local-first, safety-oriented AI assistant framework designed to give you a *Jarvis-like* agent on your own machine — transparent, controllable, and extensible.
+**ChatDock** is a local-first, safety-oriented AI assistant framework designed to give you a *ChatDock-like* agent on your own machine — transparent, controllable, and extensible.
 
 Unlike cloud-based agent systems, ChatDock prioritizes:
 - Explicit user intent
@@ -298,6 +298,6 @@ MIT License
 ## 🙌 Acknowledgements
 
 Inspired by:
-- Personal AI assistants (Jarvis)
+- Personal AI assistants (ChatDock)
 - Agentic workflows
 - Modern local LLM ecosystems

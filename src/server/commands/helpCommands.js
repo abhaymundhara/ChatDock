@@ -1,4 +1,4 @@
-const { getProfiles, getGlobalExecutionMode } = require("../capabilities/capabilityRegistry");
+const { getProfiles, getGlobalExecutionMode, getAllCapabilities } = require("../capabilities/capabilityRegistry");
 
 function handleHelpCommands(userMsg, state) {
   const normalizedMsg = userMsg.trim().toLowerCase();
@@ -73,6 +73,19 @@ function handleHelpCommands(userMsg, state) {
 `;
 
     return { handled: true, response };
+  }
+
+  // 3. List Capabilities
+  if (normalizedMsg === "list capabilities") {
+    const caps = getAllCapabilities();
+    const lines = ["**System Capabilities:**\n"];
+    for (const [key, val] of Object.entries(caps)) {
+        if (key === "unknown") continue;
+        const status = val.enabled ? "✅ Enabled" : "❌ Disabled";
+        lines.push(`- **${key}**: ${val.description} (${status})`);
+    }
+    lines.push("\nUse `enable/disable capability <name>` to change.");
+    return { handled: true, response: lines.join("\n") };
   }
 
   return { handled: false };
