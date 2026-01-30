@@ -8,6 +8,8 @@ const os = require("node:os");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { handleCommand } = require("./commands/commandRouter");
+const { initRuntime, getGlobalExecutionMode } = require("./capabilities/capabilityRegistry");
+const { initAuditLogger, logAudit } = require("./utils/auditLogger");
 
 const {
   port: PORT,
@@ -41,13 +43,18 @@ if (!fs.existsSync(MEMORY_DIR)) {
   fs.mkdirSync(MEMORY_DIR, { recursive: true });
 }
 
+// Initialize Runtime Config (Capabilities & Execution Mode persistence)
+initRuntime(WORKSPACE_ROOT);
+initAuditLogger(WORKSPACE_ROOT);
+
 // Load prompts from external MD files
 const PROMPTS_DIR = path.join(__dirname, "../../prompts");
 const INTENT_CLARIFIER_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "intent_clarifier.md"), "utf-8");
 const ANSWER_MODE_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "answer_mode.md"), "utf-8");
+const PLANNER_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "planner_mode.md"), "utf-8");
 
 // State management
-const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, canSaveLastAnswer: bool, pendingIntent: string, lastAnswerContent: string, currentProjectSlug: string | null, pendingProjectDeletionSlug: string | null }
+const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, canSaveLastAnswer: bool, pendingIntent: string, lastAnswerContent: string, currentProjectSlug: string | null, pendingProjectDeletionSlug: string | null, lastGeneratedPlan: any | null, executedPlanSteps: number[] }
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -150,7 +157,16 @@ app.post("/chat", async (req, res) => {
         pendingIntent: "",
         lastAnswerContent: "",
         currentProjectSlug: null,
-        pendingProjectDeletionSlug: null
+        pendingProjectDeletionSlug: null,
+        lastGeneratedPlan: null,
+        executedPlanSteps: [],
+        pendingEdits: {}, // stepNumber -> { path, content }
+        pendingOrganize: {}, // stepNumber -> [{ source, dest }]
+        executionMode: getGlobalExecutionMode(), // "manual" | "disabled" from config
+        pendingStepPermission: null, // { stepNumber, capability }
+        skippedPlanSteps: [], // [stepNumber]
+        stepExecutionHistory: [], // [{ stepNumber, type, metadata }]
+        planChangeHistory: [] // [{ timestamp, changeType, details }]
       });
     }
     const state = sessionState.get(sessionId);
@@ -178,6 +194,110 @@ app.post("/chat", async (req, res) => {
 
     // Always reset save capability if any other message is sent (and not handled as a command)
     state.canSaveLastAnswer = false;
+
+    // --- PLANNER MODE ---
+    const normalizedInput = userMsg.trim().toLowerCase();
+    if (normalizedInput.startsWith("plan") || normalizedInput.startsWith("create a plan")) {
+      console.log(`[server] Planner Mode triggered for session ${sessionId}.`);
+      
+      const plannerMessages = [
+        { role: "system", content: PLANNER_SYSTEM_PROMPT },
+        { role: "user", content: userMsg }
+      ];
+
+      const plannerResponseStream = await fetch(`${OLLAMA_BASE}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: chosenModel,
+          messages: plannerMessages,
+          stream: true,
+        }),
+      });
+
+      if (!plannerResponseStream.ok) throw new Error(`Ollama error: ${plannerResponseStream.status}`);
+
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+
+      const reader = plannerResponseStream.body.getReader();
+      const decoder = new TextDecoder();
+      let fullPlanContent = "";
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n");
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const data = JSON.parse(line);
+              if (data.message?.content) {
+                const content = data.message.content;
+                fullPlanContent += content;
+                res.write(content);
+              }
+            } catch (e) {}
+          }
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // Store the plan in state
+      try {
+        const jsonMatch = fullPlanContent.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          let jsonStr = jsonMatch[0];
+          // Simple fix for common truncation issues
+          if (jsonStr.includes('"steps":') && !jsonStr.includes(']')) jsonStr += ']}';
+          else if (jsonStr.startsWith('{') && !jsonStr.endsWith('}')) jsonStr += '}';
+          
+          const parsed = JSON.parse(jsonStr);
+          if (parsed && Array.isArray(parsed.steps) && parsed.steps.length > 0) {
+            const allowedTypes = ["read_file", "write_file", "edit_file", "organize_files", "analyze_content", "research", "os_action", "unknown"];
+            parsed.steps = parsed.steps.map(step => ({
+              ...step,
+              type: allowedTypes.includes(step.type) ? step.type : "unknown"
+            }));
+            state.lastGeneratedPlan = parsed;
+            // Record Change
+            const historyEntry = {
+                timestamp: new Date().toISOString(),
+                changeType: "created",
+                details: "Plan generated"
+            };
+            state.planChangeHistory = [historyEntry]; // Reset history on new plan
+            
+            logAudit("PLAN_GENERATED", { goal: parsed.goal, steps: parsed.steps.length });
+          } else {
+            console.warn("[server] Planner generated plan with no steps.");
+            state.lastGeneratedPlan = null;
+          }
+        } else {
+          state.lastGeneratedPlan = null;
+        }
+      } catch (e) {
+        console.warn("[server] Failed to parse planner JSON:", e.message);
+        state.lastGeneratedPlan = null;
+      }
+
+      // Append footer
+      const planFooter = "\n\nIf you want me to execute this plan, say: proceed with plan.";
+      res.write(planFooter);
+      
+      // Update history
+      state.history.push({ role: "user", content: userMsg });
+      state.history.push({ role: "assistant", content: fullPlanContent + planFooter });
+      if (state.history.length > 5) {
+        state.history.splice(0, state.history.length - 5);
+      }
+
+      res.end();
+      return;
+    }
 
     // --- EXISTING FLOWS (Clarify -> Confirm) ---
     let activeSystemPrompt = INTENT_CLARIFIER_SYSTEM_PROMPT;
