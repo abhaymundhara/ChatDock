@@ -40,3 +40,5 @@ Documentation.MD
 # User-specific memory (auto-created on first run)
 Memory/
 docs/
+
+jarvis_test_logs/
