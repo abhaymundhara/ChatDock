@@ -21,6 +21,8 @@ const OLLAMA_BASE = process.env.OLLAMA_BASE || "http://127.0.0.1:11434";
 const WORKSPACE_ROOT = path.join(os.homedir(), "Desktop", "chatdock_workspace");
 const NOTES_DIR = path.join(WORKSPACE_ROOT, "notes");
 const DOCS_DIR = path.join(WORKSPACE_ROOT, "docs");
+const PROJECTS_DIR = path.join(WORKSPACE_ROOT, "projects");
+const MEMORY_DIR = path.join(WORKSPACE_ROOT, "memory");
 
 // Ensure workspace directories exist
 if (!fs.existsSync(WORKSPACE_ROOT)) {
@@ -32,6 +34,12 @@ if (!fs.existsSync(NOTES_DIR)) {
 if (!fs.existsSync(DOCS_DIR)) {
   fs.mkdirSync(DOCS_DIR, { recursive: true });
 }
+if (!fs.existsSync(PROJECTS_DIR)) {
+  fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+}
+if (!fs.existsSync(MEMORY_DIR)) {
+  fs.mkdirSync(MEMORY_DIR, { recursive: true });
+}
 
 // Load prompts from external MD files
 const PROMPTS_DIR = path.join(__dirname, "../../prompts");
@@ -39,7 +47,7 @@ const INTENT_CLARIFIER_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "i
 const ANSWER_MODE_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "answer_mode.md"), "utf-8");
 
 // State management
-const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, canSaveLastAnswer: bool, pendingIntent: string, lastAnswerContent: string }
+const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, canSaveLastAnswer: bool, pendingIntent: string, lastAnswerContent: string, currentProjectSlug: string | null, pendingProjectDeletionSlug: string | null }
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -140,7 +148,9 @@ app.post("/chat", async (req, res) => {
         awaitingConfirmation: false,
         canSaveLastAnswer: false,
         pendingIntent: "",
-        lastAnswerContent: ""
+        lastAnswerContent: "",
+        currentProjectSlug: null,
+        pendingProjectDeletionSlug: null
       });
     }
     const state = sessionState.get(sessionId);
@@ -150,7 +160,9 @@ app.post("/chat", async (req, res) => {
       ...state,
       WORKSPACE_ROOT,
       NOTES_DIR,
-      DOCS_DIR
+      DOCS_DIR,
+      PROJECTS_DIR,
+      MEMORY_DIR
     });
 
     if (cmdResult.handled) {

@@ -1,5 +1,7 @@
 const { handleNotesCommands } = require("./notesCommands");
 const { handleDocsCommands } = require("./docsCommands");
+const { handleProjectsCommands } = require("./projectsCommands");
+const { handleMemoryCommands } = require("./memoryCommands");
 
 async function handleCommand(userMsg, state) {
   const normalizedMsg = userMsg.trim().toLowerCase();
@@ -27,6 +29,14 @@ async function handleCommand(userMsg, state) {
 
   // 3. Try Docs Commands
   result = handleDocsCommands(userMsg, state);
+  if (result.handled) return result;
+
+  // 4. Try Projects Commands
+  result = handleProjectsCommands(userMsg, state);
+  if (result.handled) return result;
+
+  // 5. Try Memory Commands
+  result = handleMemoryCommands(userMsg, state);
   if (result.handled) return result;
 
   // No command matched
