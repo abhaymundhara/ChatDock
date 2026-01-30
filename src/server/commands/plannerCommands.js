@@ -1008,6 +1008,121 @@ function handlePlannerCommands(userMsg, state) {
       }
   }
 
+  // 9c. Session Snapshot & Restore
+  const SESSIONS_DIR_NAME = "sessions";
+
+  if (normalizedMsg === "save session") {
+     const sessionId = `session_${Date.now()}`;
+     const sessionsDir = path.join(state.WORKSPACE_ROOT, SESSIONS_DIR_NAME);
+     if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
+
+     // Capture Capability State
+     const caps = getAllCapabilities(); // returns object { type: { executable, enabled, description } }
+     const capabilityState = {};
+     for (const [type, info] of Object.entries(caps)) {
+         capabilityState[type] = info.enabled;
+     }
+
+     const snapshot = {
+         id: sessionId,
+         timestamp: new Date().toISOString(),
+         sessionState: {
+             lastGeneratedPlan: state.lastGeneratedPlan,
+             executedPlanSteps: state.executedPlanSteps || [],
+             skippedPlanSteps: state.skippedPlanSteps || [],
+             pendingStepPermission: state.pendingStepPermission,
+             planLocked: state.planLocked || false,
+             executionMode: state.executionMode || "manual",
+             stepExecutionHistory: state.stepExecutionHistory || [],
+             planChangeHistory: state.planChangeHistory || [],
+             currentProjectSlug: state.currentProjectSlug || null,
+             pendingEdits: state.pendingEdits || {},
+             pendingOrganize: state.pendingOrganize || {}
+         },
+         capabilities: capabilityState
+     };
+
+     fs.writeFileSync(path.join(sessionsDir, `${sessionId}.json`), JSON.stringify(snapshot, null, 2));
+     logAudit("SESSION_SAVED", { sessionId });
+     return { handled: true, response: `Session saved with ID: **${sessionId}**` };
+  }
+
+  if (normalizedMsg === "list sessions") {
+      const sessionsDir = path.join(state.WORKSPACE_ROOT, SESSIONS_DIR_NAME);
+      if (!fs.existsSync(sessionsDir)) return { handled: true, response: "No saved sessions found." };
+      
+      const files = fs.readdirSync(sessionsDir).filter(f => f.endsWith(".json"));
+      if (files.length === 0) return { handled: true, response: "No saved sessions found." };
+
+      let response = "**Saved Sessions:**\n\n";
+      for (const file of files) {
+          try {
+              const content = fs.readFileSync(path.join(sessionsDir, file), "utf-8");
+              const s = JSON.parse(content);
+              const planGoal = s.sessionState.lastGeneratedPlan ? s.sessionState.lastGeneratedPlan.goal : "No active plan";
+              response += `- **${s.id}**: ${planGoal} [${new Date(s.timestamp).toLocaleString()}]\n`;
+          } catch (e) {
+              response += `- ${file} (Error reading)\n`;
+          }
+      }
+      return { handled: true, response };
+  }
+
+  if (normalizedMsg.startsWith("load session")) {
+      const parts = userMsg.trim().split(/\s+/);
+      const sessionId = parts[2];
+      if (!sessionId) return { handled: true, response: "Usage: load session <id>" };
+
+      const sessionsDir = path.join(state.WORKSPACE_ROOT, SESSIONS_DIR_NAME);
+      const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
+      
+      // Security check
+      if (!path.resolve(sessionPath).startsWith(sessionsDir)) return { handled: true, response: "Invalid session ID path." };
+      if (!fs.existsSync(sessionPath)) return { handled: true, response: `Session ID '${sessionId}' not found.` };
+
+      try {
+          const content = fs.readFileSync(sessionPath, "utf-8");
+          const snapshot = JSON.parse(content);
+          
+          // Restore Capabilities
+          if (snapshot.capabilities) {
+              for (const [type, enabled] of Object.entries(snapshot.capabilities)) {
+                  if (enabled) enableCapability(type);
+                  else disableCapability(type);
+              }
+          }
+           
+          logAudit("SESSION_LOADED", { sessionId });
+          return {
+              handled: true,
+              response: `Session '${sessionId}' restored successfully.`,
+              newState: {
+                  ...state,
+                  ...snapshot.sessionState
+              }
+          };
+
+      } catch (e) {
+           return { handled: true, response: `Failed to load session: ${e.message}` };
+      }
+  }
+
+  if (normalizedMsg.startsWith("delete session")) {
+      const parts = userMsg.trim().split(/\s+/);
+      const sessionId = parts[2];
+      if (!sessionId) return { handled: true, response: "Usage: delete session <id>" };
+
+      const sessionsDir = path.join(state.WORKSPACE_ROOT, SESSIONS_DIR_NAME);
+      const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
+      
+      if (!path.resolve(sessionPath).startsWith(sessionsDir)) return { handled: true, response: "Invalid session ID path." };
+      if (!fs.existsSync(sessionPath)) return { handled: true, response: `Session ID '${sessionId}' not found.` };
+
+      fs.unlinkSync(sessionPath);
+      logAudit("SESSION_DELETED", { sessionId });
+      return { handled: true, response: `Session '${sessionId}' deleted.` };
+  }
+
   // 10. Check Plan Readiness
   if (normalizedMsg === "check plan readiness") {
     if (!state.lastGeneratedPlan) {
