@@ -1,4 +1,4 @@
-// server.js - Intent Clarifier Mode with Confirmation Flow
+// server.js - Intent Clarifier Mode with Confirmation & Proceed Gate
 const http = require("node:http");
 const express = require("express");
 const cors = require("cors");
@@ -21,7 +21,7 @@ const INTENT_CLARIFIER_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "i
 const ANSWER_MODE_SYSTEM_PROMPT = fs.readFileSync(path.join(PROMPTS_DIR, "answer_mode.md"), "utf-8");
 
 // State management
-const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, pendingIntent: string }
+const sessionState = new Map(); // sessionId -> { history: [], awaitingConfirmation: bool, awaitingProceed: bool, pendingIntent: string }
 
 // Persist the last user-chosen model between runs
 function loadLastModel() {
@@ -91,7 +91,7 @@ app.post("/models/selected", (req, res) => {
   return res.json({ ok: true, model });
 });
 
-/* Simple Chat endpoint - Refactored for Intent Clarifier mode with Confirmation Flow */
+/* Simple Chat endpoint - Refactored for Intent Clarifier mode with Confirmation & Proceed Gate */
 app.post("/chat", async (req, res) => {
   try {
     let userMsg = String(req.body?.message ?? "");
@@ -120,30 +120,54 @@ app.post("/chat", async (req, res) => {
       sessionState.set(sessionId, {
         history: [],
         awaitingConfirmation: false,
+        awaitingProceed: false,
         pendingIntent: ""
       });
     }
     const state = sessionState.get(sessionId);
     
     let activeSystemPrompt = INTENT_CLARIFIER_SYSTEM_PROMPT;
-    let isConfirmation = false;
+    let isProceedCall = false;
 
-    // Check for confirmation if we are awaiting one
+    // Check for confirmation or proceed command
     if (state.awaitingConfirmation) {
-      const confirmationRegex = /^(yes|yeah|correct|that's right|yep|ok|sure|proceed|confirm)$/i;
+      const confirmationRegex = /^(yes|yeah|correct|that's right|yep|ok|sure|confirm)$/i;
       if (confirmationRegex.test(userMsg.trim().toLowerCase())) {
-        console.log(`[server] Confirmation detected for session ${sessionId}. Switching to Answer Mode.`);
-        isConfirmation = true;
-        activeSystemPrompt = ANSWER_MODE_SYSTEM_PROMPT;
-        // Use the stored pending intent instead of the raw confirmation word
-        userMsg = state.pendingIntent;
-        // Reset confirmation state
+        console.log(`[server] Confirmation detected for session ${sessionId}. Now awaiting "proceed".`);
         state.awaitingConfirmation = false;
+        state.awaitingProceed = true;
+        
+        // Respond immediately with the proceed gate message
+        const responseText = "Understood. Ready when you are.";
+        state.history.push({ role: "user", content: userMsg });
+        state.history.push({ role: "assistant", content: responseText });
+        
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache");
+        res.write(responseText);
+        res.end();
+        return;
+      } else {
+        // Any other message breaks the flow
+        console.log(`[server] New intent detected, breaking flow for session ${sessionId}.`);
+        state.awaitingConfirmation = false;
+        state.awaitingProceed = false;
+        state.pendingIntent = "";
+      }
+    } else if (state.awaitingProceed) {
+      if (userMsg.trim().toLowerCase() === "proceed") {
+        console.log(`[server] Proceed detected for session ${sessionId}. Switching to Answer Mode.`);
+        isProceedCall = true;
+        activeSystemPrompt = ANSWER_MODE_SYSTEM_PROMPT;
+        // Use the stored pending intent instead of the word "proceed"
+        userMsg = state.pendingIntent;
+        // Reset state
+        state.awaitingProceed = false;
         state.pendingIntent = "";
       } else {
-        // Any other message breaks the confirmation flow and starts a new intent search
-        console.log(`[server] New intent detected, breaking confirmation flow for session ${sessionId}.`);
-        state.awaitingConfirmation = false;
+        // Any other message breaks the flow
+        console.log(`[server] New intent detected during proceed gate, breaking flow for session ${sessionId}.`);
+        state.awaitingProceed = false;
         state.pendingIntent = "";
       }
     }
@@ -234,7 +258,7 @@ app.post("/chat", async (req, res) => {
 /* Start server */
 const server = http.createServer(app);
 server.listen(PORT, HOST, () => {
-  console.log(`[server] Intent Clarifier (with Confirmation) listening on http://${HOST}:${PORT}`);
+  console.log(`[server] Intent Clarifier (with Proceed Gate) listening on http://${HOST}:${PORT}`);
   const last = loadLastModel();
   if (last) console.log(`[server] last chosen model: ${last}`);
 });
