@@ -166,7 +166,8 @@ app.post("/chat", async (req, res) => {
         pendingStepPermission: null, // { stepNumber, capability }
         skippedPlanSteps: [], // [stepNumber]
         stepExecutionHistory: [], // [{ stepNumber, type, metadata }]
-        planChangeHistory: [] // [{ timestamp, changeType, details }]
+        planChangeHistory: [], // [{ timestamp, changeType, details }]
+        planLocked: false // boolean
       });
     }
     const state = sessionState.get(sessionId);

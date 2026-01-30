@@ -68,8 +68,36 @@ function handlePlannerCommands(userMsg, state) {
 
 
 
+  // 1a. Plan Locking
+  if (normalizedMsg === "lock plan") {
+      if (!state.lastGeneratedPlan) return { handled: true, response: "There is no active plan to lock." };
+      
+      logAudit("PLAN_LOCKED", { planId: state.lastGeneratedPlan.id || "current" });
+      return { 
+          handled: true, 
+          response: "The current plan is now locked and cannot be modified.",
+          newState: { ...state, planLocked: true }
+      };
+  }
+
+  if (normalizedMsg === "unlock plan") {
+      if (!state.lastGeneratedPlan) return { handled: true, response: "There is no active plan to unlock." };
+      
+      logAudit("PLAN_UNLOCKED", { planId: state.lastGeneratedPlan.id || "current" });
+      return { 
+          handled: true, 
+          response: "The current plan has been unlocked.",
+          newState: { ...state, planLocked: false }
+      };
+  }
+  
+  // Helper for Locked Check
+  const isLocked = state.planLocked === true;
+  const lockedMsg = { handled: true, response: "Action blocked: The current plan is locked. Say 'unlock plan' to make changes." };
+
   // 1b. Step Reordering & Skipping
   if (normalizedMsg.startsWith("move step")) {
+    if (isLocked) return lockedMsg;
     // Syntax: move step <from> to <to>
     const match = normalizedMsg.match(/move step (\d+) to (\d+)/);
     if (!match) {
@@ -130,6 +158,7 @@ function handlePlannerCommands(userMsg, state) {
   }
 
   if (normalizedMsg.startsWith("skip step")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
 
@@ -163,6 +192,7 @@ function handlePlannerCommands(userMsg, state) {
   }
 
   if (normalizedMsg.startsWith("unskip step")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
 
@@ -194,6 +224,7 @@ function handlePlannerCommands(userMsg, state) {
   
   // Undo Step
   if (normalizedMsg.startsWith("undo step")) {
+      if (isLocked) return lockedMsg;
       const parts = userMsg.trim().split(/\s+/);
       const stepNumber = parseInt(parts[2], 10);
 
@@ -272,7 +303,8 @@ function handlePlannerCommands(userMsg, state) {
                   `**Goal:** ${plan.goal}\n` +
                   `**Steps:** ${plan.steps.length} total\n` +
                   `**Executed:** ${executedSteps.length} (Steps: ${executedSteps.join(", ") || "none"})\n` +
-                  `**Skipped:** ${skippedSteps.length} (Steps: ${skippedSteps.join(", ") || "none"})\n`;
+                  `**Skipped:** ${skippedSteps.length} (Steps: ${skippedSteps.join(", ") || "none"})\n` +
+                  `**Locked:** ${state.planLocked ? "Yes" : "No"}\n`;
     
     if (pendingPerm) {
       summary += `**Pending permission:** Step ${pendingPerm.stepNumber} (${pendingPerm.capability})\n`;
@@ -380,6 +412,7 @@ function handlePlannerCommands(userMsg, state) {
 
   // 4. Allow / Deny Step Permission
   if (normalizedMsg.startsWith("allow step")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
     
@@ -395,6 +428,7 @@ function handlePlannerCommands(userMsg, state) {
   }
 
   if (normalizedMsg.startsWith("deny step")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
 
@@ -426,6 +460,7 @@ function handlePlannerCommands(userMsg, state) {
 
   // 6. Execute Step (Permission Request)
   if (normalizedMsg.startsWith("execute step")) {
+    if (isLocked) return lockedMsg;
     // GATE: Check Global Execution Mode
     const mode = state.executionMode || "manual";
     if (mode === "disabled") {
@@ -512,6 +547,7 @@ function handlePlannerCommands(userMsg, state) {
 
   // 5. Apply Edit
   if (normalizedMsg.startsWith("apply edit")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
 
@@ -566,8 +602,8 @@ function handlePlannerCommands(userMsg, state) {
     }
   }
 
-  // 6. Apply Organize
   if (normalizedMsg.startsWith("apply organize")) {
+    if (isLocked) return lockedMsg;
     const parts = userMsg.trim().split(/\s+/);
     const stepNumber = parseInt(parts[2], 10);
 
@@ -623,6 +659,7 @@ function handlePlannerCommands(userMsg, state) {
   // 7. Cancel / Clear Plan (Updated to clear pending)
   const cancelCommands = ["cancel plan", "clear plan", "reset plan"];
   if (cancelCommands.includes(normalizedMsg)) {
+    if (isLocked) return lockedMsg;
     if (!state.lastGeneratedPlan) {
       return {
         handled: true,
