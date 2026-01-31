@@ -9,9 +9,9 @@ Please read this before using the system so expectations are clear.
 
 Jarvis is a **local-first, safety-first agent**.
 
-- It does **not** silently plan.
+- Planning is always visible and inspectable.
 - It does **not** silently execute.
-- Every action is explicit, inspectable, and reversible.
+- Every action is explicit and reversible.
 
 Think of Jarvis as:
 > **Answer → Plan → Execute**, with human approval at every boundary.
@@ -101,9 +101,9 @@ Key points:
 
 ---
 
-## Planning vs Automatic Planning
+## Automatic Planning (Now Enabled)
 
-Jarvis **does NOT automatically plan** just because you asked for an action.
+Jarvis **can automatically plan** for task-like requests.
 
 Example:
 ```
@@ -111,17 +111,18 @@ Organize my workspace
 ```
 
 Jarvis will:
-- Explain *how* to do it
-- Suggest approaches
-- NOT create a plan unless you say `plan`
+- Detect task intent
+- Generate a plan
+- Wait for your approval before execution
 
-This is intentional and safer than auto-planning systems.
+If you want **just an answer**, ask in question form (e.g. “How should I organize my workspace?”).
 
 ---
 
 ## Notes & Docs
 
 Jarvis can save responses as **notes** or **docs**.
+These are stored as Markdown files in your workspace.
 
 ### Save last response
 ```
@@ -184,7 +185,7 @@ Each project has:
 
 ## Memory System
 
-Jarvis has **explicit memory**. Nothing is saved automatically.
+Jarvis has **explicit memory** with **optional auto-memory** (configurable).
 
 ### Save memory
 ```
@@ -200,6 +201,26 @@ show memory <id>
 ### Delete memory
 ```
 forget memory <id>
+```
+
+### Search / Recall
+```
+search memories <query>
+recall <query>
+```
+
+### Auto-memory controls
+```
+auto memory on
+auto memory off
+memory status
+```
+
+### Memory config
+```
+memory config
+set memory <key> <value>
+reset memory config
 ```
 
 Memory can be:
@@ -218,6 +239,11 @@ show plan
 plan status
 plan history
 plan changes
+```
+
+### Edit
+```
+Edit this plan: add a step to export results
 ```
 
 ### Save & reuse
@@ -299,6 +325,71 @@ use execution profile safe
 
 ---
 
+## Skills
+
+Installable skills are supported with manifests (`skill.json`).
+
+### List / install / remove
+```
+list skills
+install skill <path>
+remove skill <name-or-id>
+```
+
+---
+
+## Plan Stats
+
+```
+plan stats
+```
+
+Shows plan success rate, average duration, and corrections.
+
+---
+
+## Channels (Backend Bridge)
+
+```
+list channels
+register channel <channel> <userId>
+remove channel <channel> <userId>
+```
+
+You can route Slack/Discord/email messages to the same local session via:
+`/channels/ingest`.
+
+---
+
+## Slash Commands (UI)
+
+```
+/memory ...
+/skills ...
+/stats
+/channels ...
+```
+
+Slash commands map to the same backend commands for faster control.
+
+---
+
+## Markdown Files & Workspace Layout
+
+Default workspace location:
+```
+~/Desktop/chatdock_workspace
+```
+
+Common Markdown outputs:
+- `notes/` → saved notes (`save note`)
+- `docs/` → saved docs (`save doc`)
+- `exports/` → exported plans and reports
+
+You can open and edit these `.md` files directly in any editor.
+
+---
+
 ## Sessions
 
 Sessions allow long-running work.
@@ -329,7 +420,7 @@ help execution
 
 ## Mental Model to Remember
 
-- Asking ≠ Planning
+- Asking may trigger a plan (for task-like requests)
 - Planning ≠ Execution
 - Execution ≠ Automation
 
@@ -345,6 +436,6 @@ If something feels like:
 > “Why didn’t Jarvis just do it?”
 
 The answer is almost always:
-> **Because you didn’t explicitly ask it to plan or execute.**
+> **Because you didn’t explicitly approve execution.**
 
 Once you internalize this, Jarvis becomes extremely powerful, predictable, and safe.

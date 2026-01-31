@@ -14,7 +14,7 @@ Unlike cloud-based agent systems, ChatDock prioritizes:
 
 ### 🧠 Explicit Agent Architecture
 - Clear separation between **Answer**, **Plan**, and **Execute**
-- No silent planning or execution
+- Planning is always visible; no silent execution
 - Human approval at every boundary
 
 ### 📂 Workspace & Project Awareness
@@ -29,9 +29,9 @@ Unlike cloud-based agent systems, ChatDock prioritizes:
 
 ### 🧷 Explicit Memory System
 - Manual memory (`remember this`)
-- List, inspect, and forget memories
+- Auto-memory (configurable, opt-out)
+- Search/recall memories
 - Global and project-specific memory scopes
-- No hidden or automatic memory writes
 
 ### 🧭 Planner & Execution Engine
 - Structured JSON plans
@@ -39,12 +39,23 @@ Unlike cloud-based agent systems, ChatDock prioritizes:
 - Per-step permission (`allow` / `deny`)
 - Dry runs and undo support
 - Plan history, locking, templates, and export
+- Execution ledger with step status + output
+- Plan stats (success rate, duration, corrections)
 
 ### 🔐 Safety-First Execution
 - Execution modes: `manual` / `disabled`
 - Capability-based permissions
 - Execution profiles (safe, editor, organizer, analysis)
 - Audit logs for all actions
+
+### 🧰 Skill Registry + Manifests
+- Built-in skills + installable skills
+- `skill.json` manifests with required capabilities
+- Skill-aware planning
+
+### 📡 Multi-Channel Bridge (Backend)
+- Channel sessions mapped to a single local state
+- Ingest endpoint for Slack/Discord/email connectors
 
 ### 💾 Sessions & Persistence
 - Save and restore long-running sessions
@@ -103,15 +114,22 @@ This launches:
 
 ## 🗣️ How to Use (Quick Guide)
 
+Full guide: `ChatDock_How_To_Use.md`
+
 ### Ask Questions (Default Mode)
 ```
 Explain execution modes and capabilities.
 How should I organize a programming project?
 ```
 
-### Create a Plan
+### Create a Plan (Auto-planning)
 ```
-I want to organize my workspace.
+Organize my workspace.
+```
+ChatDock detects task intent and creates a plan automatically. You still approve before any execution.
+
+You can also explicitly say:
+```
 plan
 ```
 
@@ -120,6 +138,11 @@ plan
 show plan
 plan status
 check plan readiness
+```
+
+### Edit the Plan
+```
+Edit this plan: add a step to export results.
 ```
 
 ### Execute Steps
@@ -161,18 +184,92 @@ rename note <old> to <new>
 delete note <name>
 ```
 
+### Markdown Files & Workspace Layout
+
+Default workspace:
+```
+~/Desktop/chatdock_workspace
+```
+
+Markdown outputs:
+- `notes/` → saved notes (`save note`)
+- `docs/` → saved docs (`save doc`)
+- `exports/` → exported plans and reports
+
 ---
 
 ## 🧠 Memory
 
 ```text
 remember this
+search memories <query>
+recall <query>
 list memories
 show memory <id>
 forget memory <id>
+auto memory on
+auto memory off
+memory status
+memory config
+set memory <key> <value>
+reset memory config
 ```
 
-Memory is always explicit and user-controlled.
+Memory is user-controlled, with auto-memory optional and configurable.
+
+---
+
+## 🧰 Skills
+
+```text
+list skills
+install skill <path>
+remove skill <name-or-id>
+```
+
+Skill manifests live in `skill.json` and include:
+```json
+{
+  "name": "My Skill",
+  "version": "1.0.0",
+  "requiredCaps": ["read_file"]
+}
+```
+
+---
+
+## 📊 Plan Stats
+
+```text
+plan stats
+```
+
+Tracks success rate, average completion time, and corrections.
+
+---
+
+## 📡 Channels (Backend Bridge)
+
+```text
+list channels
+register channel <channel> <userId>
+remove channel <channel> <userId>
+```
+
+Use `/channels/ingest` in the server API to pipe messages from Slack/Discord/email into the same local session.
+
+---
+
+## ⌨️ Slash Commands (UI)
+
+```text
+/memory ...
+/skills ...
+/stats
+/channels ...
+```
+
+Slash commands map to the same backend commands for quicker control.
 
 ---
 
