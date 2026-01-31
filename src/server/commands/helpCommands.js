@@ -28,6 +28,7 @@ function handleHelpCommands(userMsg, state) {
 - **Execution:** \`proceed with plan\`, \`execute step <n>\`, \`plan status\`
 - **Review:** \`check plan readiness\`
 - **Edits:** \`apply edit <n>\`, \`apply organize <n>\`
+- **Skills:** \`list skills\`
 
 **Safety & Profiles**
 - **Profiles:** \`list execution profiles\`, \`use execution profile <name>\`

@@ -8,7 +8,7 @@ const REGISTRY = {
   organize_files: { executable: true, enabled: false, description: "Moves or restructures files" },
   analyze_content: { executable: false, enabled: false, description: "Analyzes existing content" },
   research: { executable: false, enabled: false, description: "Gathers external information when enabled in the future (stub)" },
-  os_action: { executable: false, enabled: false, description: "Performs OS-level actions such as opening apps, controlling windows, or running system commands (future)" },
+  os_action: { executable: true, enabled: false, description: "Performs OS-level actions such as opening apps, controlling windows, or running system commands" },
   unknown: { executable: false, enabled: false, description: "Unclassified step" }
 };
 

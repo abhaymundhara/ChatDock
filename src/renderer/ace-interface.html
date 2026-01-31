@@ -6,6 +6,7 @@
     <title>ChatDock</title>
     <link rel="stylesheet" href="styles/ace-ui.css" />
     <link rel="stylesheet" href="styles/plan-panel.css" />
+    <link rel="stylesheet" href="styles/console-panel.css" />
     <link
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap"
       rel="stylesheet"
@@ -55,6 +56,10 @@
           <div class="action-badge" id="statusBadge" style="display: none">
             Ready
           </div>
+
+          <button class="btn-console-toggle" id="btnConsoleToggle" title="Show OS Console">
+            <span>Console</span>
+          </button>
 
           <!-- YOLO Toggle (Global) -->
           <div
@@ -121,6 +126,41 @@
         </div>
       </div>
 
+      <!-- Console Panel (Hidden by default) -->
+      <div class="console-panel hidden" id="consolePanel">
+        <div class="console-header">
+          <div class="console-title">
+            <span>💻 OS Console</span>
+          </div>
+        </div>
+        <div class="console-body">
+          <div class="run-list" id="runList">
+            <!-- Run items injected here -->
+          </div>
+          <div class="run-detail" id="runDetail">
+            <div class="empty-state" id="consoleEmptyState">
+              <span>Select a command run to view output</span>
+            </div>
+            <div class="run-detail-content hidden" id="runDetailContent">
+                <div class="run-detail-header">
+                  <div class="run-time" id="detailTime"></div>
+                  <div class="run-detail-cmd" id="detailCmd"></div>
+                </div>
+                <div class="run-output">
+                  <div class="output-section">
+                    <div class="output-label">Stdout</div>
+                    <div class="output-content stdout-content" id="detailStdout"></div>
+                  </div>
+                  <div class="output-section">
+                    <div class="output-label">Stderr</div>
+                    <div class="output-content stderr-content" id="detailStderr"></div>
+                  </div>
+                </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Expanded Content -->
       <div class="expanded-content" id="expandedList">
         <div class="messages-list" id="messagesList"></div>
@@ -149,6 +189,7 @@
       const statusBadge = document.getElementById("statusBadge");
       const settingsBtn = document.getElementById("settingsBtn");
       const commandPalette = document.getElementById("commandPalette");
+      const btnConsoleToggle = document.getElementById("btnConsoleToggle");
 
       // Plan Panel Elements
       const planPanel = document.getElementById("planPanel");
@@ -162,6 +203,16 @@
       const planActions = document.getElementById("planActions");
       const yoloToggle = document.getElementById("yoloToggle");
 
+      // Console Panel Elements
+      const consolePanel = document.getElementById("consolePanel");
+      const runList = document.getElementById("runList");
+      const runDetailContent = document.getElementById("runDetailContent");
+      const consoleEmptyState = document.getElementById("consoleEmptyState");
+      const detailTime = document.getElementById("detailTime");
+      const detailCmd = document.getElementById("detailCmd");
+      const detailStdout = document.getElementById("detailStdout");
+      const detailStderr = document.getElementById("detailStderr");
+
       // ===== State =====
       let isProcessing = false;
       let currentModels = [];
@@ -170,6 +221,11 @@
       let isYoloMode = false;
       let pollInterval = null;
       let lastPlanJson = ""; // for change detection
+      let pendingPlanProceed = false;
+      let isConsoleOpen = false;
+      let consoleRuns = [];
+      let selectedRunId = null;
+      let consolePollInterval = null;
 
       // ===== Available Commands =====
       const COMMANDS = [
@@ -517,6 +573,7 @@
 
         // Handle NONE state - no plan
         if (!data.hasPlan || !data.plan) {
+          pendingPlanProceed = false;
           planPanel.classList.add("hidden");
           return;
         }
@@ -538,7 +595,11 @@
         expand(true); 
 
         // Get plan state
-        const status = data.status || "proposed";
+        const rawStatus = data.status || "proposed";
+        let status = rawStatus;
+        if (pendingPlanProceed && status === "proposed") {
+          status = "executing";
+        }
         // Locked must be explicitly true
         const isLocked = data.locked === true;
 
@@ -580,6 +641,10 @@
         btnAccept.textContent = "✓ Accept";
         btnReject.textContent = "✕ Reject";
 
+        if (status !== "proposed") {
+          pendingPlanProceed = false;
+        }
+
         switch (status) {
           case "proposed":
             // Accept, Edit, Reject all enabled
@@ -609,6 +674,30 @@
             btnEdit.disabled = false;
             btnReject.disabled = false;
             break;
+
+          case "executing":
+            // Hide all actions while executing
+            btnAccept.classList.add("hidden");
+            btnEdit.classList.add("hidden");
+            btnReject.classList.add("hidden");
+            statusBadgePlan.textContent = "⚙️ Executing...";
+            statusBadgePlan.className = "status-badge executing";
+            break;
+
+          case "paused":
+            // Show main Accept as "Allow Step N" and keep Reject as "Cancel Plan"
+            btnAccept.classList.remove("hidden");
+            btnAccept.disabled = false;
+            btnEdit.classList.add("hidden");
+            btnReject.classList.remove("hidden");
+            btnReject.textContent = "✕ Cancel Plan";
+
+            const pendingId = data.pendingStepPermission ? data.pendingStepPermission.stepNumber : "";
+            btnAccept.textContent = `✓ Allow Step ${pendingId}`;
+            
+            statusBadgePlan.textContent = "⏸ Paused";
+            statusBadgePlan.className = "status-badge paused";
+            break;
             
           case "completed":
              // All done. Show minimal completion status.
@@ -616,16 +705,18 @@
              btnEdit.classList.add("hidden");
              btnReject.classList.add("hidden");
              statusBadgePlan.textContent = "Request completed";
-             statusBadgePlan.className = "status-badge completed"; // New class for green pill
+             statusBadgePlan.className = "status-badge completed"; 
              
-             // Auto-hide logic could go here or be managed by user closing it.
-             // User Request: "Plan mode bar should hide once tasks are complete"
-             // We'll set a timeout to hide the panel, but keep the badge visible?
-             // Actually, the main status badge is separate. 
-             // We can hide the PLAN PANEL but maybe update the GLOBAL status badge?
              setTimeout(() => {
                  planPanel.classList.add("hidden");
-                 // Optional: Flash global success
+                 
+                 // Explicitly sync backend state to cleared
+                 fetch("http://localhost:3001/plan/reset", {
+                     method: "POST",
+                     headers: { "Content-Type": "application/json" },
+                     body: JSON.stringify({ sessionId: sessionId })
+                 }).catch(e => console.warn("Failed to reset plan:", e));
+
                  statusBadge.style.display = 'flex';
                  statusBadge.innerText = 'Request completed';
                  statusBadge.className = 'action-badge success';
@@ -669,29 +760,175 @@
           .map((step) => {
             const isExecuted = (data.executedSteps || []).includes(step.id);
             const isSkipped = (data.skippedSteps || []).includes(step.id);
-            let classes = "plan-step";
-            let icon = "○"; // pending
+            const isRunning = data.executingStepId === step.id;
+            const statusData = (data.stepStatus && data.stepStatus[step.id]) || null;
+            const status = isSkipped
+              ? "skipped"
+              : statusData?.status || (isExecuted ? "done" : isRunning ? "running" : "queued");
+            const latencyMs = statusData?.latencyMs;
+            const output = statusData?.output;
+            const stdout = statusData?.stdout;
+            const stderr = statusData?.stderr;
 
-            if (isExecuted) {
-              classes += " executed";
+            let classes = "plan-step";
+            let icon = "○"; // queued
+            if (status === "done") {
+              classes += " done";
               icon = "✓";
-            } else if (isSkipped) {
+            } else if (status === "failed") {
+              classes += " failed";
+              icon = "✕";
+            } else if (status === "running") {
+              classes += " running";
+              icon = `<div class="spinner"></div>`;
+            } else if (status === "paused") {
+              classes += " paused-step";
+              icon = `<span class="icon-paused">⏸</span>`;
+            } else if (status === "skipped") {
               classes += " skipped";
               icon = "−";
+            } else {
+              classes += " queued";
             }
 
+            let outputBlocks = "";
+            const parts = [];
+            if (output) {
+              parts.push(`<div class="step-output-block"><div class="output-label">Response</div><pre>${escapeHtml(output)}</pre></div>`);
+            }
+            if (stdout) {
+              parts.push(`<div class="step-output-block"><div class="output-label">Stdout</div><pre>${escapeHtml(stdout)}</pre></div>`);
+            }
+            if (stderr) {
+              parts.push(`<div class="step-output-block error"><div class="output-label">Stderr</div><pre>${escapeHtml(stderr)}</pre></div>`);
+            }
+            if (parts.length) {
+              const openAttr = status === "failed" ? " open" : "";
+              outputBlocks = `<details class="step-output"${openAttr}><summary>Output</summary>${parts.join("")}</details>`;
+            }
+
+            const meta = latencyMs ? `<span class="step-meta">${Math.round(latencyMs)}ms</span>` : "";
+
             return `<div class="${classes}">
-              <span class="step-id">${step.id}.</span>
-              <span class="step-type">${step.type}</span>
-              <span class="step-desc">${escapeHtml(step.description)}</span>
-              <span class="step-status">${icon}</span>
+              <div class="step-main">
+                <span class="step-id">${step.id}.</span>
+                <span class="step-type">${step.type}</span>
+                <span class="step-desc">${escapeHtml(step.description)}</span>
+                ${meta}
+                <span class="step-status">${icon}</span>
+              </div>
+              ${outputBlocks}
             </div>`;
           })
           .join("");
       }
+      
+      // ===== Console Panel Logic =====
+      async function fetchOSRuns() {
+        try {
+          const res = await fetch(`${CHAT_BASE}/os/runs`);
+          const data = await res.json();
+          consoleRuns = data;
+          updateConsoleUI();
+        } catch (err) {
+          console.error("Failed to fetch OS runs:", err);
+        }
+      }
+
+      function updateConsoleUI() {
+        if (!isConsoleOpen) return;
+
+        // Render List
+        if (consoleRuns.length === 0) {
+            runList.innerHTML = `<div class="empty-state">No commands executed yet</div>`;
+        } else {
+            runList.innerHTML = consoleRuns.map(run => {
+                const isActive = selectedRunId === run.id;
+                let statusIcon = "○";
+                if (run.status === "running") statusIcon = `<div class="spinner-small"></div>`;
+                else if (run.status === "success") statusIcon = "✓";
+                else if (run.status === "error") statusIcon = "✕";
+
+                const timeStr = new Date(run.timestampStarted).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                
+                return `
+                    <div class="run-item ${isActive ? 'active' : ''}" onclick="selectRun('${run.id}')">
+                        <div class="run-item-top">
+                            <span class="run-status-icon">${statusIcon}</span>
+                            <span class="run-time">${timeStr}</span>
+                        </div>
+                        <div class="run-cmd">${escapeHtml(run.command)}</div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // Render Detail
+        const selectedRun = consoleRuns.find(r => r.id === selectedRunId);
+        if (selectedRun) {
+            consoleEmptyState.classList.add("hidden");
+            runDetailContent.classList.remove("hidden");
+            
+            detailTime.textContent = `${new Date(selectedRun.timestampStarted).toLocaleString()} (${selectedRun.status})`;
+            detailCmd.textContent = selectedRun.command;
+            
+            // Standardize output (handling nulls)
+            const stdout = selectedRun.stdout || (selectedRun.status === 'running' ? '...waiting for output...' : '(No output)');
+            const stderr = selectedRun.stderr || '';
+            
+            detailStdout.textContent = stdout;
+            detailStderr.textContent = stderr;
+        } else {
+            consoleEmptyState.classList.remove("hidden");
+            runDetailContent.classList.add("hidden");
+        }
+      }
+
+      window.selectRun = (id) => {
+        selectedRunId = id;
+        updateConsoleUI();
+      }
+
+      function toggleConsole() {
+        isConsoleOpen = !isConsoleOpen;
+        btnConsoleToggle.classList.toggle("active", isConsoleOpen);
+        consolePanel.classList.toggle("hidden", !isConsoleOpen);
+        
+        if (isConsoleOpen) {
+          expand(true);
+          fetchOSRuns();
+          // Auto-poll when open
+          if (!consolePollInterval) {
+            consolePollInterval = setInterval(fetchOSRuns, 2000);
+          }
+        } else {
+          if (consolePollInterval) {
+            clearInterval(consolePollInterval);
+            consolePollInterval = null;
+          }
+        }
+      }
+
+      btnConsoleToggle.addEventListener("click", toggleConsole);
 
       // Actions
       btnAccept.addEventListener("click", () => {
+        const status = lastPlanJson ? JSON.parse(lastPlanJson).status : "";
+        const data = lastPlanJson ? JSON.parse(lastPlanJson) : {};
+
+        if (status === "paused" && data.pendingStepPermission) {
+            chatInput.value = `allow step ${data.pendingStepPermission.stepNumber}`;
+            sendMessage();
+            return;
+        }
+
+        // Immediate UI feedback
+        pendingPlanProceed = true;
+        planActions.classList.add("hidden");
+        const statusBadgePlan = document.getElementById("statusBadgePlan");
+        statusBadgePlan.textContent = "⚙️ Executing...";
+        statusBadgePlan.className = "status-badge executing";
+
         if (isYoloMode) {
           // Future: could append flag
         }

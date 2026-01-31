@@ -5,6 +5,7 @@ const cors = require("cors");
 const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const { chooseModel } = require("../shared/choose-model");
 const { getServerConfig } = require("./utils/server-config");
 const { handleCommand } = require("./commands/commandRouter");
@@ -23,7 +24,15 @@ const {
   logError,
   endRun,
 } = require("./utils/runLogger");
+const {
+  initPlanFeedbackLogger,
+  logPlanOutcome,
+  logStepMetric,
+  logActionMetric
+} = require("./utils/planFeedback");
 const { executePlanLoop } = require("./utils/executionLoop");
+const osRunManager = require("./utils/osRunManager");
+const { findMatchingSkill } = require("./skills/skillRegistry");
 
 const {
   port: PORT,
@@ -61,6 +70,7 @@ if (!fs.existsSync(MEMORY_DIR)) {
 initRuntime(WORKSPACE_ROOT);
 initAuditLogger(WORKSPACE_ROOT);
 initRunLogger(WORKSPACE_ROOT);
+initPlanFeedbackLogger(WORKSPACE_ROOT, MEMORY_DIR);
 
 // Load prompts from external MD files
 const PROMPTS_DIR = path.join(__dirname, "../../prompts");
@@ -77,43 +87,97 @@ const PLANNER_SYSTEM_PROMPT = fs.readFileSync(
   "utf-8",
 );
 
+async function generateSkillContent(userMessage, chosenModel, options = {}) {
+  const systemPrompt =
+    "You are a writing assistant. Return ONLY the requested content. Do not add prefaces, explanations, or markdown fences.";
+  const userPrompt = `User request: ${userMessage}\n\nWrite the content as requested.`;
+
+  const startedAt = Date.now();
+
+  const response = await fetch(`${OLLAMA_BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: chosenModel,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      stream: false
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  const content = (data?.message?.content || "").trim();
+  const latencyMs = Date.now() - startedAt;
+  const tokenEstimate = Math.ceil(content.length / 4);
+  logActionMetric({
+    action: "skill_generate_content",
+    skillId: options?.skillId || null,
+    filename: options?.filename || null,
+    model: chosenModel,
+    latencyMs,
+    tokenEstimate,
+    costUsd: null,
+    timestamp: new Date().toISOString()
+  });
+  return content;
+}
+
+function initStepStatus(plan) {
+  const status = {};
+  if (!plan || !Array.isArray(plan.steps)) return status;
+  for (const step of plan.steps) {
+    status[step.id] = {
+      status: "queued",
+      type: step.type,
+      description: step.description,
+      startedAt: null,
+      finishedAt: null,
+      latencyMs: null,
+      output: null,
+      stdout: null,
+      stderr: null
+    };
+  }
+  return status;
+}
+
 // ===== INTENT CLASSIFIER =====
 // Deterministic, rule-based intent classification for routing messages
 // Returns: "command" | "task" | "chat"
 
 const KNOWN_COMMANDS = [
   // Save commands
-  "save",
   "save note",
   "save doc",
   "save document",
   "save as note",
   "save as doc",
   // List commands
-  "list",
   "list notes",
   "list docs",
   "list documents",
   "list projects",
   "list memories",
   // Open commands
-  "open",
   "open note",
   "open doc",
   "open document",
   "open project",
   // Rename commands
-  "rename",
   "rename note",
   "rename doc",
   "rename project",
   // Delete commands
-  "delete",
   "delete note",
   "delete doc",
   "delete document",
   "delete project",
-  "remove",
   // Memory commands
   "remember this",
   "recall",
@@ -160,6 +224,9 @@ const KNOWN_COMMANDS = [
   "show execution profiles",
   "current execution profile",
   "use execution profile",
+  // Skill registry commands
+  "list skills",
+  "show skills",
   // Help
   "help",
   "what can you do",
@@ -167,28 +234,15 @@ const KNOWN_COMMANDS = [
 
 // Verbs and phrases that indicate task-like requests
 const TASK_VERBS = [
-  "plan", // added
-  "write", // added
-  "compose", // added
+  "plan",
   "organize",
   "clean",
   "refactor",
-  "create",
   "set up",
   "configure",
   "rename",
   "move",
   "delete",
-  "summarize",
-  "scan",
-  "analyze",
-  "rewrite",
-  "generate",
-  "build",
-  "design",
-  "draft",
-  "fix",
-  "update",
   "migrate",
   "consolidate",
   "extract",
@@ -198,6 +252,15 @@ const TASK_VERBS = [
   "sync",
   "backup",
   "restore",
+  "run",
+  "search",
+  "find",
+  "list",
+  "open",
+  "execute",
+  "shell",
+  "terminal",
+  "show"
 ];
 
 // Phrases that indicate task-like requests
@@ -218,7 +281,31 @@ const TASK_PHRASES = [
   "would you mind",
   "can you please",
   "i'd like to",
+  "run this",
+  "i want you to",
 ];
+
+const SAVE_INTENT_PATTERN =
+  /\b(save|export|store|save\s+as|save\s+it|save\s+this|write\s+.*\bto\b)\b/i;
+const FILE_TARGET_PATTERN = /[\\w./-]+\.[A-Za-z0-9]{1,8}\b/;
+const FILE_OP_PATTERN =
+  /\b(open|read|rename|move|delete|organize|summarize|scan|analyze|export)\b/i;
+const FILE_SCOPE_PATTERN =
+  /\b(file|folder|directory|workspace|project|repo|document|doc|note)\b/i;
+const FILE_CREATE_TARGET_PATTERN =
+  /\b(file|folder|directory|workspace|document|doc|note)\b/i;
+const PROJECT_TARGET_PATTERN = /\bproject\b/i;
+const WRITE_VERB_PATTERN = /\b(write|draft|create|compose|generate|build)\b/i;
+const PLAN_INTENT_PATTERN =
+  /^(plan\b|make\s+a\s+plan\b)|\bplan\s+steps\b|\bsteps?\s+to\b/i;
+const EDIT_PLAN_PATTERN = /^edit(?:\s+this)?\s+plan\b[:\s-]*/i;
+
+function hasTaskFileIntent(normalized) {
+  return (
+    FILE_OP_PATTERN.test(normalized) &&
+    (FILE_SCOPE_PATTERN.test(normalized) || FILE_TARGET_PATTERN.test(normalized))
+  );
+}
 
 /**
  * Classifies a user message into one of three intents:
@@ -258,6 +345,43 @@ function classifyIntent(messageText) {
   }
 
   // 2. Check for task-like patterns
+  const hasSaveIntent = SAVE_INTENT_PATTERN.test(normalized);
+  const hasFileTarget = FILE_TARGET_PATTERN.test(normalized);
+  const hasFileIntent = hasTaskFileIntent(normalized);
+  const hasPlanIntent = PLAN_INTENT_PATTERN.test(normalized);
+  const hasFileCreateTarget = FILE_CREATE_TARGET_PATTERN.test(normalized);
+  const hasProjectTarget = PROJECT_TARGET_PATTERN.test(normalized);
+  const hasWriteVerb = WRITE_VERB_PATTERN.test(normalized);
+
+  if (hasPlanIntent) {
+    console.log(`[Intent] Plan intent detected.`);
+    return "task";
+  }
+
+  if (EDIT_PLAN_PATTERN.test(normalized)) {
+    console.log(`[Intent] Edit plan intent detected.`);
+    return "task";
+  }
+
+  if (hasSaveIntent || hasFileIntent || hasFileTarget) {
+    console.log(`[Intent] File/save intent detected.`);
+    return "task";
+  }
+
+  if (hasWriteVerb && hasFileCreateTarget) {
+    console.log(`[Intent] Explicit creation target detected.`);
+    return "task";
+  }
+
+  if (/(\\bcreate\\b|\\bset up\\b|\\bconfigure\\b)/i.test(normalized) && hasProjectTarget) {
+    console.log(`[Intent] Project setup intent detected.`);
+    return "task";
+  }
+
+  if (hasWriteVerb) {
+    console.log(`[Intent] Content-only write detected; defaulting to chat.`);
+    return "chat";
+  }
 
   // Check if starts with a task verb
   for (const verb of TASK_VERBS) {
@@ -273,8 +397,12 @@ function classifyIntent(messageText) {
   // Check for task-like phrases
   for (const phrase of TASK_PHRASES) {
     if (normalized.includes(phrase)) {
+      if (hasSaveIntent || hasFileIntent || hasPlanIntent || hasFileCreateTarget || hasProjectTarget) {
+        console.log(`[Intent] Task phrase with actionable target: "${phrase}"`);
+        return "task";
+      }
       console.log(`[Intent] Task phrase match: "${phrase}"`);
-      return "task";
+      break;
     }
   }
 
@@ -371,14 +499,18 @@ app.get("/plan/active", (req, res) => {
   }
 
   // Determine plan status based on state
-  let status = "proposed";
+  let status = state.planStatus || "proposed";
+  
   if (state.planLocked) {
     status = "locked";
-  } else if (state.executedPlanSteps && state.executedPlanSteps.length > 0) {
-    if (state.executedPlanSteps.length >= state.lastGeneratedPlan.steps.length) {
-      status = "completed";
-    } else {
-      status = "accepted";
+  } else if (!state.planStatus) {
+    // Legacy mapping or first time
+    if (state.executedPlanSteps && state.executedPlanSteps.length > 0) {
+      if (state.executedPlanSteps.length >= state.lastGeneratedPlan.steps.length) {
+        status = "completed";
+      } else {
+        status = "accepted";
+      }
     }
   }
 
@@ -389,7 +521,39 @@ app.get("/plan/active", (req, res) => {
     locked: state.planLocked || false,
     executedSteps: state.executedPlanSteps || [],
     skippedSteps: state.skippedPlanSteps || [],
+    executingStepId: state.executingStepId || null,
+    pendingStepPermission: state.pendingStepPermission || null,
+    stepStatus: state.stepStatus || {},
   });
+});
+
+app.post("/plan/reset", (req, res) => {
+  const sessionId = req.body?.sessionId || "default";
+  const state = sessionState.get(sessionId);
+
+  if (state) {
+    state.lastGeneratedPlan = null;
+    state.executedPlanSteps = [];
+    state.planStatus = null;
+    state.executingStepId = null;
+    state.pendingStepPermission = null;
+    state.stepStatus = {};
+    state.activePlanRunId = null;
+    state.planOutcomeLogged = false;
+    state.lastPlanRequest = null;
+    sessionState.set(sessionId, state);
+  }
+  res.json({ ok: true });
+});
+
+app.get("/os/runs", (req, res) => {
+  res.json(osRunManager.getRuns());
+});
+
+app.get("/os/runs/:id", (req, res) => {
+  const run = osRunManager.getRun(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+  res.json(run);
 });
 
 // ===== END Plan Status Endpoint =====
@@ -527,9 +691,11 @@ function validatePlan(plan, userMessage) {
     }
 
     // Check 1d: Goal must not be identical to user message
+    /* 
     if (goal.toLowerCase() === userMsgLower) {
       reasons.push("Goal is identical to user message (not elaborated)");
     }
+    */
   }
 
   // Check 2: Steps must be a non-empty array
@@ -597,6 +763,20 @@ function normalizePlan(plan, userMessage) {
     const userMsgWords = userMessage.split(" ").slice(0, 5).join(" ");
     normalizedPlan.goal = `${userMsgWords}: ${normalizedPlan.goal}`;
     normalized = true;
+  }
+
+  // Normalization 1.5: Salvage malformed steps (e.g. command/content in wrong field)
+  if (Array.isArray(normalizedPlan.steps)) {
+    for (const step of normalizedPlan.steps) {
+      if (step.type === "os_action" && !step.description && step.command) {
+        step.description = `Run command: ${step.command}`;
+        normalized = true;
+      }
+      if (step.type === "write_file" && !step.description?.includes("content:") && step.content) {
+          step.description = `${step.description || "Create file"}. content: ${step.content}`;
+          normalized = true;
+      }
+    }
   }
 
   // Normalization 2: Handle single research step
@@ -701,6 +881,7 @@ app.post("/chat", async (req, res) => {
         canSaveLastAnswer: false,
         pendingIntent: "",
         lastAnswerContent: "",
+        sessionId,
         currentProjectSlug: null,
         pendingProjectDeletionSlug: null,
         lastGeneratedPlan: null,
@@ -711,8 +892,12 @@ app.post("/chat", async (req, res) => {
         pendingStepPermission: null, // { stepNumber, capability }
         skippedPlanSteps: [], // [stepNumber]
         stepExecutionHistory: [], // [{ stepNumber, type, metadata }]
+        stepStatus: {}, // stepId -> { status, output, stdout, stderr, ... }
         planChangeHistory: [], // [{ timestamp, changeType, details }]
         planLocked: false, // boolean
+        activePlanRunId: null,
+        planOutcomeLogged: false,
+        lastPlanRequest: null,
       });
     }
     const state = sessionState.get(sessionId);
@@ -720,6 +905,38 @@ app.post("/chat", async (req, res) => {
     // ===== INTENT CLASSIFICATION =====
     const intent = classifyIntent(userMsg);
     logIntentClassification(userMsg, intent);
+
+    // Auto-clear logic for plans
+    const normalizedLow = userMsg.trim().toLowerCase();
+    if (state.lastGeneratedPlan) {
+        // Explicit cancel
+        if (normalizedLow === "cancel plan" || normalizedLow === "reset plan") {
+            state.lastGeneratedPlan = null;
+            state.executedPlanSteps = [];
+            state.planStatus = null;
+            state.executingStepId = null;
+            state.pendingStepPermission = null;
+            state.stepStatus = {};
+            state.activePlanRunId = null;
+            state.planOutcomeLogged = false;
+            state.lastPlanRequest = null;
+            sessionState.set(sessionId, state);
+        } 
+        // Auto-clear completed plan on new interaction
+        else if (state.planStatus === 'completed' && intent !== 'command') {
+            state.lastGeneratedPlan = null;
+            state.executedPlanSteps = [];
+            state.planStatus = null;
+            state.executingStepId = null;
+            state.pendingStepPermission = null;
+            state.stepStatus = {};
+            state.activePlanRunId = null;
+            state.planOutcomeLogged = false;
+            state.lastPlanRequest = null;
+            sessionState.set(sessionId, state);
+        }
+    }
+
     console.log(
       `[Intent] message="${userMsg.substring(0, 50)}..." intent="${intent}"`,
     );
@@ -731,6 +948,7 @@ app.post("/chat", async (req, res) => {
       logStep("command_handling", "Routing to command handler");
       const cmdResult = await handleCommand(userMsg, {
         ...state,
+        sessionId,
         WORKSPACE_ROOT,
         NOTES_DIR,
         DOCS_DIR,
@@ -761,8 +979,27 @@ app.post("/chat", async (req, res) => {
           
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
           res.setHeader("Cache-Control", "no-cache");
-          
-          await executePlanLoop(enrichedState, res, sessionId, handleCommand, sessionState);
+
+          if (!state.activePlanRunId) {
+            state.activePlanRunId = "plan-" + Date.now();
+          }
+
+          const initialStepStatus =
+            state.stepStatus && Object.keys(state.stepStatus).length
+              ? state.stepStatus
+              : initStepStatus(state.lastGeneratedPlan);
+          const metrics = {
+            planId: state.activePlanRunId,
+            planGoal: state.lastGeneratedPlan?.goal || "",
+            planSource: state.planChangeHistory?.[0]?.details || "planner",
+            planRequest: state.lastPlanRequest || null,
+            planSteps: state.lastGeneratedPlan?.steps || [],
+            stepStatus: initialStepStatus,
+            logStepMetric,
+            logPlanOutcome
+          };
+
+          await executePlanLoop(enrichedState, res, sessionId, handleCommand, sessionState, metrics);
           res.end();
           return;
       }
@@ -795,15 +1032,95 @@ app.post("/chat", async (req, res) => {
       logStep("planning_init", "Starting automatic planning");
 
       try {
-        const { fullPlanContent, parsedPlan } = await invokePlanner(
-          userMsg,
-          chosenModel,
-          state,
-        );
+        const isEditPlanRequest = EDIT_PLAN_PATTERN.test(userMsg.trim());
+        if (isEditPlanRequest && !state.lastGeneratedPlan) {
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          res.write("There is no active plan to edit. Create a plan first.");
+          res.end();
+          return;
+        }
+
+        if (isEditPlanRequest && state.planLocked) {
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          res.write("The current plan is locked. Say 'unlock plan' to make edits.");
+          res.end();
+          return;
+        }
+
+        const skillContext = {
+          workspaceRoot: WORKSPACE_ROOT,
+          projectsDir: PROJECTS_DIR,
+          currentProjectSlug: state.currentProjectSlug,
+          generateContent: async (message, meta) =>
+            generateSkillContent(message, chosenModel, meta)
+        };
+
+        let fullPlanContent = "";
+        let parsedPlan = null;
+        let usedSkill = null;
+
+        if (!isEditPlanRequest) {
+          const matchedSkill = findMatchingSkill(userMsg, skillContext);
+          if (matchedSkill) {
+            usedSkill = matchedSkill;
+            logPlanning("skill_selected", {
+              skillId: matchedSkill.id,
+              name: matchedSkill.name
+            });
+            try {
+              const buildStart = Date.now();
+              parsedPlan = await matchedSkill.buildPlan(userMsg, skillContext);
+              const buildLatency = Date.now() - buildStart;
+              fullPlanContent = JSON.stringify(parsedPlan, null, 2);
+              logActionMetric({
+                action: "skill_build_plan",
+                skillId: matchedSkill.id,
+                latencyMs: buildLatency,
+                costUsd: null,
+                timestamp: new Date().toISOString()
+              });
+            } catch (err) {
+              logPlanning("skill_failed", {
+                skillId: matchedSkill.id,
+                error: err.message || String(err)
+              });
+              parsedPlan = null;
+            }
+          } else {
+            logPlanning("skill_selected", { skillId: null });
+          }
+        }
+
+        if (!parsedPlan) {
+          const plannerStart = Date.now();
+          const plannerInput = isEditPlanRequest
+            ? `Edit the existing plan based on the user's changes.\n\nCurrent plan JSON:\n${JSON.stringify(state.lastGeneratedPlan, null, 2)}\n\nUser changes:\n${userMsg.replace(EDIT_PLAN_PATTERN, "").trim() || "(No specific changes provided)"}\n\nReturn updated plan JSON only.`
+            : userMsg;
+          const plannerResult = await invokePlanner(
+            plannerInput,
+            chosenModel,
+            state,
+          );
+          const plannerLatency = Date.now() - plannerStart;
+          fullPlanContent = plannerResult.fullPlanContent;
+          parsedPlan = plannerResult.parsedPlan;
+          usedSkill = null;
+          logActionMetric({
+            action: "planner_generate",
+            model: chosenModel,
+            latencyMs: plannerLatency,
+            tokenEstimate: Math.ceil((fullPlanContent || "").length / 4),
+            costUsd: null,
+            timestamp: new Date().toISOString()
+          });
+        }
 
         logPlanning("generation", {
           hasPlan: !!parsedPlan,
           stepCount: parsedPlan?.steps?.length,
+          source: usedSkill ? `skill:${usedSkill.id}` : "planner"
         });
 
         // ===== PLAN QUALITY GATE =====
@@ -850,10 +1167,19 @@ app.post("/chat", async (req, res) => {
         if (planToStore && !planRejected) {
           // Store the validated/normalized plan in state
           state.lastGeneratedPlan = planToStore;
+          state.stepStatus = initStepStatus(planToStore);
+          state.activePlanRunId = crypto.randomUUID();
+          state.planOutcomeLogged = false;
+          state.lastPlanRequest = userMsg;
+          const editDetails = userMsg.replace(EDIT_PLAN_PATTERN, "").trim();
           const historyEntry = {
             timestamp: new Date().toISOString(),
-            changeType: "created",
-            details: planNormalized
+            changeType: isEditPlanRequest ? "edited" : "created",
+            details: isEditPlanRequest
+              ? `Edited plan${editDetails ? `: ${editDetails}` : ""}`
+              : usedSkill
+              ? `Skill plan (${usedSkill.id})${planNormalized ? " (normalized)" : ""}`
+              : planNormalized
               ? "Auto-generated plan (normalized)"
               : "Auto-generated plan",
           };
@@ -874,7 +1200,12 @@ app.post("/chat", async (req, res) => {
             );
           }
 
-          const summary = `I've created a plan with ${stepCount} step${stepCount !== 1 ? "s" : ""} to accomplish your goal. You can review it in the plan panel above.`;
+          const summaryBase = isEditPlanRequest
+            ? `I've updated the plan with ${stepCount} step${stepCount !== 1 ? "s" : ""}. You can review it in the plan panel above.`
+            : `I've created a plan with ${stepCount} step${stepCount !== 1 ? "s" : ""} to accomplish your goal. You can review it in the plan panel above.`;
+          const summary = usedSkill
+            ? `${summaryBase}\n\n*Skill used:* **${usedSkill.name}**`
+            : summaryBase;
           res.write(summary);
 
           // Manual execution required - user must click Accept
@@ -992,6 +1323,7 @@ app.post("/chat", async (req, res) => {
       ...state.history,
     ];
 
+    const chatStart = Date.now();
     const response = await fetch(`${OLLAMA_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1039,6 +1371,15 @@ app.post("/chat", async (req, res) => {
     // Log LLM response
     const tokenEstimate = Math.ceil(assistantMsg.length / 4);
     logLLMResponse(chosenModel, tokenEstimate, assistantMsg);
+    const latencyMs = Date.now() - chatStart;
+    logActionMetric({
+      action: "chat_response",
+      model: chosenModel,
+      latencyMs,
+      tokenEstimate,
+      costUsd: null,
+      timestamp: new Date().toISOString()
+    });
 
     // --- POST-LLM LOGIC ---
     

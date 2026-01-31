@@ -46,7 +46,7 @@ async function handleCommand(userMsg, state) {
   if (result.handled) return result;
 
   // 6. Try Planner Commands
-  result = handlePlannerCommands(userMsg, state);
+  result = await handlePlannerCommands(userMsg, state);
   if (result.handled) return result;
 
   // No command matched

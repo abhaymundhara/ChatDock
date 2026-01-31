@@ -4,8 +4,11 @@ const path = require("node:path");
 const os = require("node:os");
 const { getScopeName } = require("./utils");
 const { logAudit } = require("../utils/auditLogger");
+const { logStepMetric, logPlanOutcome } = require("../utils/planFeedback");
+const { getAllSkills } = require("../skills/skillRegistry");
+const { executeShell, executeShellWithRunId, checkCommandSafety, osRunManager, ALLOWED_PATHS } = require("../utils/shell-executor");
 
-function handlePlannerCommands(userMsg, state) {
+async function handlePlannerCommands(userMsg, state) {
   const normalizedMsg = userMsg.trim().toLowerCase();
 
   // 0a. Execution Mode Commands
@@ -137,7 +140,10 @@ function handlePlannerCommands(userMsg, state) {
         pendingStepPermission: null,
         pendingEdits: {},
         pendingOrganize: {},
-        skippedPlanSteps: [] // Reset skips on reorder to avoid confusion
+        stepStatus: {},
+        skippedPlanSteps: [], // Reset skips on reorder to avoid confusion
+        planOutcomeLogged: false,
+        activePlanRunId: `plan_${Date.now()}`
     };
 
     logAudit("PLAN_REORDERED", { from: fromIdx, to: toIdx });
@@ -319,6 +325,19 @@ function handlePlannerCommands(userMsg, state) {
   }
 
   // 0b. List Capabilities
+  if (normalizedMsg === "list skills" || normalizedMsg === "show skills") {
+    const skills = getAllSkills();
+    if (!skills.length) {
+      return { handled: true, response: "No skills are registered." };
+    }
+    const lines = ["**Registered Skills:**\n"];
+    for (const skill of skills) {
+      lines.push(`- **${skill.id}**: ${skill.description}`);
+    }
+    return { handled: true, response: lines.join("\n") };
+  }
+
+  // 0c. List Capabilities
   if (normalizedMsg === "list capabilities" || normalizedMsg === "show capabilities") {
     const caps = getAllCapabilities();
     let response = "**Capabilities Status:**\n\n";
@@ -373,7 +392,11 @@ function handlePlannerCommands(userMsg, state) {
     const mode = state.executionMode || "manual";
     return {
       handled: true,
-      response: `Plan confirmed. Current Execution Mode: **${mode}**. Say 'execute step 1' to begin.`
+      response: `Plan confirmed. Current Execution Mode: **${mode}**. Say 'execute step 1' to begin.`,
+      newState: {
+        ...state,
+        planStatus: "executing"
+      }
     };
   }
 
@@ -425,7 +448,9 @@ function handlePlannerCommands(userMsg, state) {
     // We clear the permission first
     const cleanState = { ...state, pendingStepPermission: null };
     logAudit("STEP_ALLOWED", { step: stepNumber });
-    return executeStepLogic(stepNumber, cleanState, userMsg);
+    return await runStepWithLedger(stepNumber, cleanState, userMsg, () =>
+        executeStepLogic(stepNumber, cleanState, userMsg)
+    );
   }
 
   if (normalizedMsg.startsWith("deny step")) {
@@ -532,11 +557,13 @@ function handlePlannerCommands(userMsg, state) {
     }
 
     // Ask for permission OR Auto-Execute if SAFE
-    const SAFE_TYPES = ["read_file", "write_file", "edit_file", "organize_files"];
+    const SAFE_TYPES = ["read_file", "write_file", "edit_file", "organize_files", "os_action"];
     if (SAFE_TYPES.includes(step.type) && enabled) {
         // Auto-Execute Safe Step (Bypass confirmation)
         logAudit("STEP_AUTO_EXECUTED_SAFE", { step: stepNumber, type: step.type });
-        return executeStepLogic(stepNumber, state, userMsg);
+        return await runStepWithLedger(stepNumber, state, userMsg, () =>
+            executeStepLogic(stepNumber, state, userMsg)
+        );
     }
     
     logAudit("STEP_PERMISSION_REQUESTED", { step: stepNumber, capability: step.type });
@@ -681,12 +708,18 @@ function handlePlannerCommands(userMsg, state) {
       newState: {
         ...state,
         lastGeneratedPlan: null,
-        lastGeneratedPlan: null,
         executedPlanSteps: [],
         pendingEdits: {},
         pendingOrganize: {},
+        pendingStepPermission: null,
         skippedPlanSteps: [],
-        stepExecutionHistory: []
+        stepExecutionHistory: [],
+        stepStatus: {},
+        planOutcomeLogged: false,
+        planStatus: null,
+        executingStepId: null,
+        activePlanRunId: null,
+        lastPlanRequest: null
       }
     };
   }
@@ -778,6 +811,9 @@ function handlePlannerCommands(userMsg, state) {
                   pendingEdits: {},
                   pendingOrganize: {},
                   stepExecutionHistory: [],
+                  stepStatus: {},
+                  planOutcomeLogged: false,
+                  activePlanRunId: `plan_${Date.now()}`,
                   planChangeHistory: [historyEntry] // Reset history on load
                   // We do NOT automatically switch projectSlug based on the plan, maintaining current user context.
               }
@@ -916,6 +952,10 @@ function handlePlannerCommands(userMsg, state) {
                   pendingEdits: {},
                   pendingOrganize: {},
                   stepExecutionHistory: [],
+                  stepStatus: {},
+                  planOutcomeLogged: false,
+                  activePlanRunId: `plan_${Date.now()}`,
+                  lastPlanRequest: null,
                   planChangeHistory: [historyEntry]
               }
           };
@@ -1008,6 +1048,10 @@ function handlePlannerCommands(userMsg, state) {
                   pendingEdits: {},
                   pendingOrganize: {},
                   stepExecutionHistory: [],
+                  stepStatus: {},
+                  planOutcomeLogged: false,
+                  activePlanRunId: `plan_${Date.now()}`,
+                  lastPlanRequest: null,
                   planChangeHistory: [historyEntry]
               }
           };
@@ -1189,44 +1233,164 @@ function handlePlannerCommands(userMsg, state) {
   return { handled: false };
 }
 
-// Helper to resolve paths within workspace OR allowed home folders
-function resolveSafePath(filename, description, state) {
-    const HOME = os.homedir();
-    const ALLOWED_EXTERNAL_ROOTS = [
-        path.join(HOME, "Desktop"),
-        path.join(HOME, "Documents"),
-        path.join(HOME, "Downloads")
-    ];
+function isAllowedPath(targetPath) {
+    return ALLOWED_PATHS.some((allowed) => targetPath.startsWith(allowed));
+}
 
-    let rootDir = state.WORKSPACE_ROOT;
+function formatLocation(state, targetPath) {
+    const relPath = path.relative(state.WORKSPACE_ROOT, targetPath);
+    return relPath.startsWith("..") ? targetPath : `workspace/${relPath}`;
+}
+
+function updateStepStatus(state, stepId, update) {
+    const stepStatus = { ...(state.stepStatus || {}) };
+    const prev = stepStatus[stepId] || {};
+    stepStatus[stepId] = { ...prev, ...update };
+    return stepStatus;
+}
+
+function isPlanComplete(state) {
+    const total = state.lastGeneratedPlan?.steps?.length || 0;
+    if (!total) return false;
+    const executed = state.executedPlanSteps || [];
+    const skipped = state.skippedPlanSteps || [];
+    return executed.length + skipped.length >= total;
+}
+
+function maybeLogPlanOutcome(state, status) {
+    if (!state.lastGeneratedPlan || state.planOutcomeLogged) return null;
+    const payload = {
+        sessionId: state.sessionId || "default",
+        planId: state.activePlanRunId || null,
+        status,
+        goal: state.lastGeneratedPlan.goal,
+        stepsTotal: state.lastGeneratedPlan.steps.length,
+        source: state.planChangeHistory?.[0]?.details || "planner",
+        request: state.lastPlanRequest || null,
+        planSteps: state.lastGeneratedPlan?.steps || [],
+        timestamp: new Date().toISOString()
+    };
+    logPlanOutcome(payload);
+    return payload;
+}
+
+async function runStepWithLedger(stepNumber, state, userMsg, executor) {
+    const stepStart = Date.now();
+    const result = await executor();
+    if (!result || !result.handled) {
+        return result;
+    }
+
+    const response = result.response || "";
+    const finishedAt = Date.now();
+    const latencyMs = finishedAt - stepStart;
+    const status = response.includes("requires confirmation")
+        ? "paused"
+        : response.includes("**Failed Step**") || response.startsWith("Error")
+        ? "failed"
+        : "done";
+
+    const nextState = result.newState ? { ...result.newState } : { ...state };
+    if (!nextState.planStatus || nextState.planStatus === "paused") {
+        nextState.planStatus = "executing";
+    }
+    nextState.executingStepId = null;
+    nextState.stepStatus = updateStepStatus(nextState, stepNumber, {
+        status,
+        startedAt: stepStart,
+        finishedAt: status === "paused" ? null : finishedAt,
+        latencyMs: status === "paused" ? null : latencyMs,
+        output: response
+    });
+
+    logStepMetric({
+        sessionId: nextState.sessionId || "default",
+        planId: nextState.activePlanRunId || null,
+        stepId: stepNumber,
+        type: nextState.lastGeneratedPlan?.steps?.[stepNumber - 1]?.type,
+        status,
+        latencyMs: status === "paused" ? null : latencyMs,
+        timestamp: new Date().toISOString()
+    });
+
+    if (status === "paused") {
+        nextState.planStatus = "paused";
+    }
+
+    if (status === "done" && isPlanComplete(nextState)) {
+        nextState.planStatus = "completed";
+        const outcome = maybeLogPlanOutcome(nextState, "success");
+        if (outcome) {
+            nextState.planOutcomeLogged = true;
+        }
+    }
+
+    if (status === "failed") {
+        nextState.planStatus = "error";
+        const outcome = maybeLogPlanOutcome(nextState, "failed");
+        if (outcome) {
+            nextState.planOutcomeLogged = true;
+        }
+    }
+
+    return { ...result, newState: nextState };
+}
+
+// Resource Resolution Engine
+async function resolveResourcePath(filename, state) {
+    // 1. Check Workspace
+    const workspacePath = path.resolve(state.WORKSPACE_ROOT, filename);
+    if (fs.existsSync(workspacePath)) {
+        return { path: workspacePath, source: "workspace" };
+    }
+
+    // 2. Check current project scope if applicable
     if (state.currentProjectSlug) {
-        rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+        const projectPath = path.resolve(state.PROJECTS_DIR, state.currentProjectSlug, filename);
+        if (fs.existsSync(projectPath)) {
+            return { path: projectPath, source: "project" };
+        }
     }
 
-    let targetPath = path.resolve(rootDir, filename);
+    // 3. Fallback: OS Search in Allowed Paths
+    const searchRoots = ALLOWED_PATHS.filter((root) => !root.includes("chatdock_workspace"));
 
-    // Re-routing for keywords or absolute paths
-    if (path.isAbsolute(filename)) {
-        targetPath = filename;
-    } else if (description.toLowerCase().includes("desktop") && !filename.includes("/")) {
-        targetPath = path.join(HOME, "Desktop", filename);
-    } else if (filename.startsWith("Desktop/")) {
-        targetPath = path.join(HOME, filename);
+    // HIGH PERFORMANCE: Use mdfind (Spotlight) for instant results
+    for (const root of searchRoots) {
+        if (!fs.existsSync(root)) continue;
+
+        try {
+            const cmd = `mdfind -name "${filename}" -onlyin "${root}" | head -n 1`;
+            const { stdout } = await executeShell(cmd, "system_search");
+            const foundPath = stdout.trim();
+            if (foundPath && fs.existsSync(foundPath)) {
+                return { path: foundPath, source: "os_search" };
+            }
+        } catch (e) {
+            // Ignore search errors
+        }
     }
 
-    // Validation
-    const isInternal = targetPath.startsWith(rootDir);
-    const isAllowedExternal = ALLOWED_EXTERNAL_ROOTS.some(root => targetPath.startsWith(root));
-
-    if (!isInternal && !isAllowedExternal) {
-        return { error: `Access denied: Path '${targetPath}' is outside of workspace and allowed folders.` };
+    // Fallback: find for unindexed locations
+    for (const root of searchRoots) {
+        if (!fs.existsSync(root)) continue;
+        try {
+            const cmd = `find "${root}" -maxdepth 3 -name "${filename}" -type f -not -path "*/.*" 2>/dev/null | head -n 1`;
+            const { stdout } = await executeShell(cmd, "system_search_fallback");
+            const foundPath = stdout.trim();
+            if (foundPath && fs.existsSync(foundPath)) {
+                return { path: foundPath, source: "os_search_fallback" };
+            }
+        } catch (e) {
+            // Ignore search errors
+        }
     }
 
-    return { path: targetPath };
+    return { error: `File '${filename}' not found in workspace or common OS folders.` };
 }
 
 // Helper to run the actual logic after permission is granted
-function executeStepLogic(stepNumber, state, userMsg) {
+async function executeStepLogic(stepNumber, state, userMsg) {
     const plan = state.lastGeneratedPlan;
     const steps = plan.steps || [];
     const step = steps[stepNumber - 1];
@@ -1254,9 +1418,8 @@ function executeStepLogic(stepNumber, state, userMsg) {
         };
     }
     
-
-
-    // --- REAL EXECUTION LOGIC STARTS HERE ---\n    
+    // --- REAL EXECUTION LOGIC STARTS HERE ---
+    
     // Handle 'read_file' execution
     if (executable && step.type === "read_file") {
       try {
@@ -1278,19 +1441,18 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        const resolution = resolveSafePath(filename, step.description, state);
+        // Use new Resolution Engine
+        const resolution = await resolveResourcePath(filename, state);
+        
         if (resolution.error) {
-            return { handled: true, response: resolution.error };
-        }
-        const targetPath = resolution.path;
-
-        if (!fs.existsSync(targetPath)) {
-          return {
-            handled: true,
-            response: `File not found: ${filename} (resolved to ${targetPath})`
-          };
+             return {
+                handled: true,
+                response: `**Step ${stepNumber} Failed**: ${resolution.error}\n*Resolution attempted:* Workspace and allowed OS paths.`
+            };
         }
         
+        const targetPath = resolution.path;
+
         // Read Content
         const stats = fs.statSync(targetPath);
         if (stats.isDirectory()) {
@@ -1303,9 +1465,15 @@ function executeStepLogic(stepNumber, state, userMsg) {
         const content = fs.readFileSync(targetPath, "utf-8");
         const preview = content.length > 2000 ? content.substring(0, 2000) + "\n... (truncated)" : content;
 
+        let responseMsg = `**Executed Step ${stepNumber}: Read file '${filename}'**\n`;
+        if (resolution.source && resolution.source.startsWith("os_")) {
+            responseMsg += `*(Found outside workspace at: \`${targetPath}\`)*\n`;
+        }
+        responseMsg += `\n\`\`\`\n${preview}\n\`\`\``;
+
         return {
           handled: true,
-          response: `**Executed Step ${stepNumber}: Read file '${filename}'**\n\n\`\`\`\n${preview}\n\`\`\``,
+          response: responseMsg,
           newState: {
             ...state,
             executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber]
@@ -1323,7 +1491,7 @@ function executeStepLogic(stepNumber, state, userMsg) {
     // Handle 'write_file' execution
     if (executable && step.type === "write_file") {
       try {
-        // Parse filename: look for first quoted string or token
+        // Parse filename
         const filenameMatch = step.description.match(/["'`]((?:[^"']+\.[a-zA-Z0-9]+)|(?:[^"']+\/)?(?:[^"']+\.[a-zA-Z0-9]+))["'`]/) || step.description.match(/\b([\w-]+\.[a-z0-9]{2,4})\b/i);
         
         let filename = null;
@@ -1336,25 +1504,43 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        const resolution = resolveSafePath(filename, step.description, state);
-        if (resolution.error) {
-            return { handled: true, response: resolution.error };
-        }
-        const targetPath = resolution.path;
-
-        // Parse content: Attempt to find "content: ..." or "with content ..."
-        // Strategies: 
-        // 1. "content: <text>"
-        // 2. "write: <text>"
-        // 3. Fallback: Check if description ends with "write it" or "write its content" -> ask user?
+        // Resolution Strategy for Write:
+        // 1. Try to find existing file to overwrite
+        let targetPath = null;
+        let isOverwrite = false;
         
+        const existingResolution = await resolveResourcePath(filename, state);
+        
+        if (!existingResolution.error) {
+            targetPath = existingResolution.path;
+            isOverwrite = true;
+        } else {
+            // 2. New File: Resolve path (default to workspace if relative)
+            if (path.isAbsolute(filename)) {
+                targetPath = filename;
+            } else if (filename.startsWith("~/")) {
+                targetPath = path.join(os.homedir(), filename.slice(2));
+            } else {
+                targetPath = path.resolve(state.WORKSPACE_ROOT, filename);
+            }
+        }
+
+        if (!isAllowedPath(targetPath)) {
+             return {
+                handled: true,
+                response: `**Access Denied**: Cannot write to '${targetPath}'. Path is outside allowed directories (Workspace, Home, Desktop, Documents, Projects).`
+            };
+        }
+
+        // Parse content
         let content = "";
-        const contentMatch = step.description.match(/content[:\s]+["'`]?(.*?)["'`]?$/i) || step.description.match(/write[:\s]+["'`]?(.*?)["'`]?$/i);
+        const contentMatch =
+          step.description.match(/content[:\s]+["'`]?([\s\S]*)$/i) ||
+          step.description.match(/write[:\s]+["'`]?([\s\S]*)$/i);
         
         if (contentMatch) {
           content = contentMatch[1];
         } else {
-             // Fallback heuristics
              if (step.description.includes("write its content")) {
                  content = "(No specific content provided in plan)";
              } else {
@@ -1362,11 +1548,11 @@ function executeStepLogic(stepNumber, state, userMsg) {
              }
         }
 
-        // Check for overwrite unless explicitly handled (naive check for now)
-        if (fs.existsSync(targetPath) && !step.description.toLowerCase().includes("overwrite")) {
+        // Safety check for overwrite
+        if (isOverwrite && !step.description.toLowerCase().includes("overwrite")) {
           return {
             handled: true,
-            response: `File '${filename}' already exists. Use 'overwrite' in the step description to force.`
+            response: `File '${path.basename(targetPath)}' already exists at \`${targetPath}\`. Use 'overwrite' in the step description to force.`
           };
         }
 
@@ -1377,19 +1563,15 @@ function executeStepLogic(stepNumber, state, userMsg) {
         }
 
         // RECORD HISTORY
-        const exists = fs.existsSync(targetPath);
         let historyMetadata = {};
-        if (exists && !step.description.toLowerCase().includes("overwrite")) {
-           // Should have caught this earlier, but just in case
-           // (Logic repeated)
-        } else if (exists) {
+        if (isOverwrite) {
            historyMetadata = { path: targetPath, operation: "overwrite", previousContent: fs.readFileSync(targetPath, "utf-8") };
         } else {
            historyMetadata = { path: targetPath, operation: "create", previousContent: "" };
         }
 
         fs.writeFileSync(targetPath, content, "utf-8");
-        logAudit("FILE_WRITTEN", { path: targetPath }); // Reduced logging info
+        logAudit("FILE_WRITTEN", { path: targetPath });
 
         // Track execution
         const historyEntry = {
@@ -1398,12 +1580,11 @@ function executeStepLogic(stepNumber, state, userMsg) {
             metadata: historyMetadata
         };
 
-        const relPath = path.relative(state.WORKSPACE_ROOT, targetPath);
-        const locationMsg = relPath.startsWith("..") ? targetPath : `workspace/${relPath}`;
+        const locationMsg = formatLocation(state, targetPath);
 
         return {
           handled: true,
-          response: `**Executed Step ${stepNumber}: Wrote file '${filename}'**\n*Location:* \`${locationMsg}\`\n*Content:* "${content.substring(0, 50)}${content.length > 50 ? "..." : ""}"`,
+          response: `**Executed Step ${stepNumber}: Wrote file '${path.basename(targetPath)}'**\n*Location:* \`${locationMsg}\`\n*Content:* "${content.substring(0, 50)}${content.length > 50 ? "..." : ""}"`,
           newState: {
             ...state,
             executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber],
@@ -1435,69 +1616,133 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
-        const resolution = resolveSafePath(filename, step.description, state);
+        // Use new Resolution Engine
+        const resolution = await resolveResourcePath(filename, state);
         if (resolution.error) {
-            return { handled: true, response: resolution.error };
+             return {
+                handled: true,
+                response: `**Step ${stepNumber} Failed**: ${resolution.error}`
+            };
         }
+        
         const targetPath = resolution.path;
-
-        if (!fs.existsSync(targetPath)) {
-          return {
-            handled: true,
-            response: `File not found for editing: ${filename} (resolved to ${targetPath})`
-          };
-        }
-
         const currentContent = fs.readFileSync(targetPath, "utf-8");
         let newContent = currentContent;
         let diffDesc = "";
 
         // Parse Edit Instruction
-        // 1. Replace
-        // Matches "replace 'old' with 'new'" or "replacing ... 'old' with 'new'"
+        // Strategies:
+        // 1. Explicit full content ("content: ...")
+        // 2. Replace ("replace 'A' with 'B'")
+        // 3. Append ("append 'A'")
+        // 4. Prepend ("prepend 'A'")
+
+        const contentMatch = step.description.match(/content[:\s]+["'`]?([\s\S]*)$/i);
         const replaceMatch = step.description.match(/replac(?:e|ing).*?["'](.*?)["'].*?with\s+["'](.*?)["']/is);
-        // 2. Append
-        // Matches "append 'content'"
         const appendMatch = step.description.match(/append\s+["'](.*?)["']/is);
-        // 3. Prepend
-        // Matches "prepend 'content'"
         const prependMatch = step.description.match(/prepend\s+["'](.*?)["']/is);
 
-        if (replaceMatch) {
-          const [_, oldStr, newStr] = replaceMatch;
-          if (!currentContent.includes(oldStr)) {
-            return {
-              handled: true,
-              response: `Edit failed: Could not find substring '${oldStr}' in file '${filename}'.`
-            };
-          }
-          newContent = currentContent.replace(oldStr, newStr);
-          diffDesc = `Replacing:\n"${oldStr}"\n\nWith:\n"${newStr}"`;
+        if (contentMatch) {
+            newContent = contentMatch[1];
+            diffDesc = "Overwriting file content.";
+        } else if (replaceMatch) {
+            const [_, oldStr, newStr] = replaceMatch;
+            if (!currentContent.includes(oldStr)) {
+                return {
+                    handled: true,
+                    response: `Edit failed: Could not find substring '${oldStr}' in file '${filename}'.`
+                };
+            }
+            newContent = currentContent.replace(oldStr, newStr);
+            diffDesc = `Replacing:\n"${oldStr}"\n\nWith:\n"${newStr}"`;
         } else if (appendMatch) {
-          const [_, toAppend] = appendMatch;
-          newContent = currentContent + "\n" + toAppend;
-          diffDesc = `Appending:\n"${toAppend}"`;
+            const [_, toAppend] = appendMatch;
+            newContent = currentContent + "\n" + toAppend;
+            diffDesc = `Appending:\n"${toAppend}"`;
         } else if (prependMatch) {
-          const [_, toPrepend] = prependMatch;
-          newContent = toPrepend + "\n" + currentContent;
-          diffDesc = `Prepending:\n"${toPrepend}"`;
+            const [_, toPrepend] = prependMatch;
+            newContent = toPrepend + "\n" + currentContent;
+            diffDesc = `Prepending:\n"${toPrepend}"`;
         } else {
-           return {
-            handled: true,
-            response: `Could not parse simple edit instruction (replace/append/prepend) from description: "${step.description}".`
-          };
+             return {
+                handled: true,
+                response: `Could not parse edit instruction. Please use 'replace "old" with "new"', 'append "text"', or 'content: "text"'.`
+            };
         }
 
+        // Apply Edit (High Performance Streaming)
+        // We use perl for in-place editing to avoid loading large files into Node memory
+        
+        let perlCmd = "";
+        
+        if (contentMatch) {
+            // Overwrite: Just fs.write is fine for overwrites, or perl print
+            // fs.write is actually faster for full overwrite than regex
+             fs.writeFileSync(targetPath, newContent, "utf-8");
+        } else {
+             // Streaming Edits
+             // We use ENV vars to safely pass strings to perl script to avoid shell escaping hell
+             
+             // Escape function for Perl regex pattern
+             // \Q...\E automatically escapes content in Perl regex
+             
+             if (replaceMatch) {
+                 const [_, oldStr, newStr] = replaceMatch;
+                 process.env.PERL_SEARCH = oldStr;
+                 process.env.PERL_REPLACE = newStr;
+                 // perl -i -pe 's/\Q$ENV{PERL_SEARCH}\E/$ENV{PERL_REPLACE}/g' file
+                 perlCmd = `perl -i -pe 's/\\Q$ENV{PERL_SEARCH}\\E/$ENV{PERL_REPLACE}/g' "${targetPath}"`;
+                 
+             } else if (appendMatch) {
+                 const [_, toAppend] = appendMatch;
+                 process.env.PERL_APPEND = toAppend;
+                 // standard append: open file >>, simple
+                 // but for perl streaming: eof check?
+                 // Simple shell append is faster: >>
+                 // But let's stick to perl if requested, or just use >>
+                 // "Use proper shell commands" -> >> is proper shell
+                 perlCmd = `printenv PERL_APPEND >> "${targetPath}"`;
+                 
+             } else if (prependMatch) {
+                 const [_, toPrepend] = prependMatch;
+                 process.env.PERL_PREPEND = toPrepend;
+                 // Prepend is hard with shell, easy with perl
+                 // print "$ENV{PERL_PREPEND}\n" if $. == 1;
+                 perlCmd = `perl -i -pe 'print "$ENV{PERL_PREPEND}\\n" if $. == 1' "${targetPath}"`;
+             }
+
+             if (perlCmd) {
+                 await executeShell(perlCmd, 'edit_file_stream');
+                 
+                 // Clean env
+                 delete process.env.PERL_SEARCH;
+                 delete process.env.PERL_REPLACE;
+                 delete process.env.PERL_APPEND;
+                 delete process.env.PERL_PREPEND;
+             }
+        }
+        
+        // For history, we might want to read it back only if small? 
+        // User asked for speed. We can skip reading back logic or just log "stream edited".
+        // But existing contract returns response. We'll skip reading full content if >1MB maybe?
+        // For now, assume we just return success.
+        
+        const historyEntry = {
+            stepNumber,
+            type: "edit_file",
+            metadata: { path: targetPath, method: "streaming_perl" } 
+        };
+
+        const locationMsg = formatLocation(state, targetPath);
+
         return {
-          handled: true,
-          response: `**Proposed edit for '${filename}':**\n\n${diffDesc}\n\nApply this edit by typing: **apply edit ${stepNumber}**`,
-          newState: {
+            handled: true,
+            response: `**Executed Step ${stepNumber}: Edited file '${filename}'**\n*Location:* \`${locationMsg}\`\n\n${diffDesc}\n*(Applied via high-performance stream)*`,
+            newState: {
             ...state,
-            pendingEdits: {
-              ...(state.pendingEdits || {}),
-              [stepNumber]: { path: targetPath, content: newContent }
+            executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber],
+            stepExecutionHistory: [...(state.stepExecutionHistory || []), historyEntry]
             }
-          }
         };
 
       } catch (err) {
@@ -1511,13 +1756,14 @@ function executeStepLogic(stepNumber, state, userMsg) {
     // Handle 'organize_files' execution
     if (executable && step.type === "organize_files") {
       try {
-        // Parse operations: Heuristic - find the first two filename-like tokens in the description
-        // This handles "move A to B" as well as "rename A to new identifier B"
+        // Parse operations: Heuristic - find the first two filename-like tokens
         const filenameRegex = /([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]{2,4})/g;
         const matches = [...step.description.matchAll(filenameRegex)];
         
+        let srcName, destName;
+        
         if (matches.length < 2) {
-           // Fallback to strict regex if heuristic fails (e.g. filenames w/o extensions not caught likely, but user asked for extensions mostly)
+           // Fallback to strict regex
            const strictMatch = step.description.match(/(?:move|rename)\s+(?:['"`])?(.*?)(?:['"`])?\s+to\s+(?:['"`])?(.*?)(?:['"`])?$/i);
            if (!strictMatch) {
              return {
@@ -1525,35 +1771,43 @@ function executeStepLogic(stepNumber, state, userMsg) {
               response: `Could not determine source and destination files from description: "${step.description}". Expected two filenames.`
              };
            }
-           // Use strict match
-           var srcName = strictMatch[1].replace(/^['"`]|['"`]$/g, "");
-           var destName = strictMatch[2].replace(/^['"`]|['"`]$/g, "");
+           srcName = strictMatch[1].replace(/^['"`]|['"`]$/g, "");
+           destName = strictMatch[2].replace(/^['"`]|['"`]$/g, "");
         } else {
-           var srcName = matches[0][1];
-           var destName = matches[1][1];
+           srcName = matches[0][1];
+           destName = matches[1][1];
         }
 
-        // Determine Root
-        let rootDir = state.WORKSPACE_ROOT;
-        if (state.currentProjectSlug) {
-          rootDir = path.join(state.PROJECTS_DIR, state.currentProjectSlug);
+        // 1. Resolve Source Path (using Engine)
+        const resolution = await resolveResourcePath(srcName, state);
+        if (resolution.error) {
+             return {
+                handled: true,
+                response: `**Step ${stepNumber} Failed**: Source file '${srcName}' not found.`
+            };
+        }
+        const sourcePath = resolution.path;
+
+        // 2. Resolve Destination Path
+        // If absolute, use as is. If relative, resolve relative to source directory (common for renames) or workspace?
+        // Usually "move A to B" implies B is in the same dir or relative to it.
+        // Let's resolve relative to the source directory if it's a simple filename, 
+        // OR relative to workspace if it looks like "folder/file".
+        // Actually, safer to default to workspace root for relative paths to avoid confusion, 
+        // OR relative to the source path's directory (standard mv behavior).
+        
+        let destPath;
+        if (path.isAbsolute(destName)) {
+            destPath = destName;
+        } else {
+            // Rel to source dir
+            destPath = path.resolve(path.dirname(sourcePath), destName);
         }
 
-        const sourcePath = path.resolve(rootDir, srcName);
-        const destPath = path.resolve(rootDir, destName);
-
-        // Security Checks
-        if (!sourcePath.startsWith(rootDir) || !destPath.startsWith(rootDir)) {
+        if (!isAllowedPath(sourcePath) || !isAllowedPath(destPath)) {
            return {
             handled: true,
-            response: `Access denied: Operations must be within scope '${getScopeName(state)}'.`
-          };
-        }
-
-        if (!fs.existsSync(sourcePath)) {
-          return {
-            handled: true,
-            response: `Source file not found: ${srcName}`
+            response: `Access denied: Move/Rename operations must be within allowed OS directories (Workspace, Home, Desktop, etc).`
           };
         }
 
@@ -1564,15 +1818,30 @@ function executeStepLogic(stepNumber, state, userMsg) {
           };
         }
 
+        // 4. Apply Move (Auto-Execute if Allowed/Confirmed)
+        // Since we are in 'execute step', we execute.
+        
+        const destDir = path.dirname(destPath);
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+        
+        fs.renameSync(sourcePath, destPath);
+
+        const historyEntry = {
+            stepNumber,
+            type: "organize_files",
+            metadata: { moves: [{ from: sourcePath, to: destPath }] }
+        };
+
+        const relSource = formatLocation(state, sourcePath);
+        const relDest = formatLocation(state, destPath);
+
         return {
           handled: true,
-          response: `**Proposed file operations:**\n- ${srcName} -> ${destName}\n\nApply these changes by typing: **apply organize ${stepNumber}**`,
+          response: `**Executed Step ${stepNumber}: Organized files**\nMoved: \`${relSource}\`\nTo: \`${relDest}\``,
           newState: {
             ...state,
-            pendingOrganize: {
-              ...(state.pendingOrganize || {}),
-              [stepNumber]: [{ source: sourcePath, dest: destPath }]
-            }
+            executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber],
+            stepExecutionHistory: [...(state.stepExecutionHistory || []), historyEntry]
           }
         };
 
@@ -1596,16 +1865,101 @@ function executeStepLogic(stepNumber, state, userMsg) {
        };
     }
 
-    // Handle 'os_action' (Stub)
-    if (step.type === "os_action") {
-       return {
-         handled: true,
-         response: "This step requires OS-level control, which is not enabled or executable yet.",
-         newState: {
+    // Handle 'os_action' execution
+    if (executable && step.type === "os_action") {
+      try {
+        // Extract command: search for command: "..." or run: "..." or similar
+        let shellCmd = "";
+        const cmdMatch = step.description.match(/command[:\s]+\s*(.*)$/i) || 
+                         step.description.match(/run[:\s]+\s*(.*)$/i) ||
+                         step.description.match(/shell[:\s]+\s*(.*)$/i);
+        
+        if (cmdMatch) {
+          shellCmd = cmdMatch[1].trim();
+          // Remove wrapping quotes if they exist around the WHOLE command
+          if ((shellCmd.startsWith("'") && shellCmd.endsWith("'")) || 
+              (shellCmd.startsWith('"') && shellCmd.endsWith('"')) ||
+              (shellCmd.startsWith('`') && shellCmd.endsWith('`'))) {
+              shellCmd = shellCmd.slice(1, -1);
+          }
+        } else {
+             // Fallback heuristic: if description doesn't have keywords, try to clean it up
+             shellCmd = step.description.replace(/^(run|execute|perform|use the)\s+/i, "").trim();
+        }
+
+        if (!shellCmd || shellCmd.length < 2) {
+          return {
+            handled: true,
+            response: `Could not determine a valid shell command from description: "${step.description}".`
+          };
+        }
+
+        const safety = checkCommandSafety(shellCmd);
+        const isAllowedByHuman = userMsg.toLowerCase().startsWith("allow step");
+
+        // Hard block if not safe
+        if (!safety.safe) {
+            return {
+                handled: true,
+                response: `Permission Denied: ${safety.reason}`,
+                newState: {
+                    ...state,
+                    executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber]
+                }
+            };
+        }
+
+        // Require confirmation if not auto-approvable and hasn't just been allowed
+        if (!safety.autoApprove && !isAllowedByHuman) {
+            return {
+                handled: true,
+                response: `This OS Action requires confirmation: ${safety.reason || "Potentially high-impact command."}\n\n` +
+                          `Command: \`${shellCmd}\`\n\n` +
+                          `Do you want to allow this step? Type: **allow step ${stepNumber}** or **deny step ${stepNumber}**.`,
+                newState: {
+                    ...state,
+                    pendingStepPermission: { stepNumber, type: "os_action", command: shellCmd }
+                }
+            };
+        }
+
+        // AUTO-APPROVED or EXPLICITLY ALLOWED
+        const runId = osRunManager.startRun(shellCmd, 'plan');
+        const result = await executeShellWithRunId(shellCmd, runId);
+        
+        // Log execution (auto vs manual)
+        const logType = safety.autoApprove && !isAllowedByHuman ? "OS_ACTION_AUTO_APPROVED" : "OS_ACTION_MANUAL_APPROVED";
+        logAudit(logType, { step: stepNumber, command: shellCmd, success: result.success });
+
+        const statusLabel = result.success ? "**Executed Step**" : "**Failed Step**";
+        const output = (result.stdout + (result.stderr ? "\n" + result.stderr : "")).trim() || "(No output)";
+
+        const historyEntry = {
+            stepNumber,
+            type: "os_action",
+            metadata: { command: shellCmd, runId, success: result.success }
+        };
+
+        return {
+          handled: true,
+          response: `${statusLabel} ${stepNumber}: \`${shellCmd}\` (see Console for live output)\n\n\`\`\`\n${output}\n\`\`\``,
+          newState: {
             ...state,
-            executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber]
-         }
-       };
+            executedPlanSteps: [...(state.executedPlanSteps || []), stepNumber],
+            stepExecutionHistory: [...(state.stepExecutionHistory || []), historyEntry],
+            stepStatus: updateStepStatus(state, stepNumber, {
+                stdout: result.stdout || "",
+                stderr: result.stderr || ""
+            })
+          }
+        };
+
+      } catch (err) {
+        return {
+          handled: true,
+          response: `Error executing step ${stepNumber}: ${err.message}`
+        };
+      }
     }
 
     // Default for recognized but not implemented executable types
