@@ -32,6 +32,10 @@ async function executePlanLoop(state, res, sessionId, handleCommandFn, sessionSt
       return;
   }
 
+  if (!state.planStartedAt) {
+      syncSessionState(state, sessionState, sessionId, { planStartedAt: Date.now() });
+  }
+
   res.write("\n**Executing Plan Steps...**\n");
   syncSessionState(state, sessionState, sessionId, { planStatus: "executing" });
   
@@ -261,6 +265,7 @@ async function executePlanLoop(state, res, sessionId, handleCommandFn, sessionSt
       syncSessionState(state, sessionState, sessionId, { planStatus: "completed", executingStepId: null });
       res.write("\n\n**All available steps executed.**");
       if (metrics && metrics.logPlanOutcome && !state.planOutcomeLogged) {
+          const durationMs = state.planStartedAt ? Date.now() - state.planStartedAt : null;
           metrics.logPlanOutcome({
               sessionId,
               planId: metrics.planId,
@@ -269,12 +274,15 @@ async function executePlanLoop(state, res, sessionId, handleCommandFn, sessionSt
               source: metrics.planSource,
               request: metrics.planRequest || null,
               planSteps: metrics.planSteps || [],
+              skillId: metrics.planSkillId || null,
+              durationMs,
               stepsTotal: plan.steps.length,
               timestamp: new Date().toISOString()
           });
           syncSessionState(state, sessionState, sessionId, { planOutcomeLogged: true });
       }
   } else if (metrics && metrics.logPlanOutcome && !state.planOutcomeLogged) {
+      const durationMs = state.planStartedAt ? Date.now() - state.planStartedAt : null;
       metrics.logPlanOutcome({
           sessionId,
           planId: metrics.planId,
@@ -283,6 +291,8 @@ async function executePlanLoop(state, res, sessionId, handleCommandFn, sessionSt
           source: metrics.planSource,
           request: metrics.planRequest || null,
           planSteps: metrics.planSteps || [],
+          skillId: metrics.planSkillId || null,
+          durationMs,
           stepsTotal: plan.steps.length,
           timestamp: new Date().toISOString()
       });

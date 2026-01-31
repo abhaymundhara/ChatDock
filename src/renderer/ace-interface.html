@@ -232,6 +232,10 @@
         { name: "/model", description: "Switch AI model", icon: "🤖" },
         { name: "/clear", description: "Clear conversation", icon: "🗑️" },
         { name: "/help", description: "Show help", icon: "❓" },
+        { name: "/memory", description: "Memory tools (search, config)", icon: "🧠" },
+        { name: "/skills", description: "Skills management", icon: "🧰" },
+        { name: "/stats", description: "Plan stats", icon: "📊" },
+        { name: "/channels", description: "Channel sessions", icon: "📡" },
       ];
 
       // ===== Initial Setup =====
@@ -431,35 +435,13 @@
         return text.replace(/[&<>"']/g, (m) => map[m]);
       }
 
-      async function sendMessage() {
-        const text = chatInput.value.trim();
-        if (!text || isProcessing) return;
-
-        if (text.startsWith("/")) {
-          chatInput.value = "";
-          hideCommandPalette();
-          if (text === "/clear") {
-            messagesList.innerHTML = "";
-            expand(false);
-          } else if (text === "/model") {
-            showModelSelector();
-          } else if (text === "/help") {
-            addMessage(
-              "Available commands:\n/model - Switch AI model\n/clear - Clear chat\n/help - Show this help",
-              "assistant",
-            );
-          }
-          return;
-        }
-
+      async function sendToServer(messageText) {
         setThinking(true);
         expand(true);
         hideCommandPalette();
 
         // Clear previous messages to show ONLY the latest agent message
         messagesList.innerHTML = "";
-
-        chatInput.value = "";
 
         try {
           const response = await fetch(`${CHAT_BASE}/chat`, {
@@ -468,7 +450,7 @@
               ...getAuthHeaders(),
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ message: text, model: currentModel }),
+            body: JSON.stringify({ message: messageText, model: currentModel }),
           });
 
           if (!response.ok) throw new Error(`Server error: ${response.status}`);
@@ -488,6 +470,80 @@
           addMessage("Error: " + e.message, "assistant");
         }
         setThinking(false);
+      }
+
+      function mapSlashCommand(text) {
+        const raw = text.slice(1).trim();
+        const parts = raw.split(/\s+/);
+        const root = (parts[0] || "").toLowerCase();
+        const args = raw.slice(root.length).trim();
+
+        if (root === "memory") {
+          if (!args) return "memory status";
+          if (args.startsWith("search ")) return `search memories ${args.slice(7)}`;
+          if (args.startsWith("recall ")) return `recall ${args.slice(7)}`;
+          if (args === "list") return "list memories";
+          if (args.startsWith("show ")) return `show memory ${args.slice(5)}`;
+          if (args.startsWith("forget ")) return `forget memory ${args.slice(7)}`;
+          if (args.startsWith("delete ")) return `forget memory ${args.slice(7)}`;
+          if (args.startsWith("auto ")) return `auto memory ${args.slice(5)}`;
+          if (args === "config") return "memory config";
+          if (args === "config reset") return "reset memory config";
+          if (args.startsWith("config set ")) return `set memory ${args.slice(11)}`;
+          return null;
+        }
+
+        if (root === "skills") {
+          if (!args || args === "list") return "list skills";
+          if (args.startsWith("install ")) return `install skill ${args.slice(8)}`;
+          if (args.startsWith("remove ")) return `remove skill ${args.slice(7)}`;
+          return null;
+        }
+
+        if (root === "stats") {
+          return "plan stats";
+        }
+
+        if (root === "channels") {
+          if (!args || args === "list") return "list channels";
+          if (args.startsWith("register ")) return `register channel ${args.slice(9)}`;
+          if (args.startsWith("remove ")) return `remove channel ${args.slice(7)}`;
+          return null;
+        }
+
+        return null;
+      }
+
+      async function sendMessage() {
+        const text = chatInput.value.trim();
+        if (!text || isProcessing) return;
+
+        if (text.startsWith("/")) {
+          chatInput.value = "";
+          hideCommandPalette();
+          if (text === "/clear") {
+            messagesList.innerHTML = "";
+            expand(false);
+          } else if (text === "/model") {
+            showModelSelector();
+          } else if (text === "/help") {
+            addMessage(
+              "Available commands:\n/model - Switch AI model\n/clear - Clear chat\n/help - Show this help\n/memory - Memory tools\n/skills - Skills management\n/stats - Plan stats\n/channels - Channel sessions",
+              "assistant",
+            );
+          } else {
+            const mapped = mapSlashCommand(text);
+            if (!mapped) {
+              addMessage("Unknown slash command. Try /help.", "assistant");
+              return;
+            }
+            await sendToServer(mapped);
+          }
+          return;
+        }
+
+        chatInput.value = "";
+        await sendToServer(text);
       }
 
       chatInput.addEventListener("input", (e) => {

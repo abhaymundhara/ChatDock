@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ChatDock Skill Manifest",
+  "type": "object",
+  "required": ["name", "version", "requiredCaps"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requiredCaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["read_file", "write_file", "os_action"]
+      }
+    },
+    "description": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

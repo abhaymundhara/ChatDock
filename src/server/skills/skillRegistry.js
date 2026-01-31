@@ -1,4 +1,8 @@
+const fs = require("node:fs");
 const path = require("node:path");
+
+const SKILL_MANIFEST = "skill.json";
+const ALLOWED_REQUIRED_CAPS = ["read_file", "write_file", "os_action"];
 
 function sanitizeFilename(raw) {
   if (!raw) return "";
@@ -177,6 +181,70 @@ const SKILLS = [
   organizeWorkspaceSkill
 ];
 
+function validateSkillManifest(manifest) {
+  const errors = [];
+  if (!manifest || typeof manifest !== "object") {
+    return { valid: false, errors: ["Skill manifest is missing or invalid."] };
+  }
+
+  if (!manifest.name || typeof manifest.name !== "string") {
+    errors.push("Skill manifest must include a name.");
+  }
+
+  if (!manifest.version || typeof manifest.version !== "string") {
+    errors.push("Skill manifest must include a version.");
+  }
+
+  if (!Array.isArray(manifest.requiredCaps)) {
+    errors.push("Skill manifest must include requiredCaps as an array.");
+  } else {
+    const invalidCaps = manifest.requiredCaps.filter(
+      (cap) => !ALLOWED_REQUIRED_CAPS.includes(cap)
+    );
+    if (invalidCaps.length) {
+      errors.push(
+        `Invalid requiredCaps values: ${invalidCaps.join(", ")}. Allowed: ${ALLOWED_REQUIRED_CAPS.join(", ")}.`
+      );
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+function loadInstalledSkills(skillsDir) {
+  if (!skillsDir || !fs.existsSync(skillsDir)) return [];
+
+  const entries = [];
+  const dirs = fs
+    .readdirSync(skillsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name);
+
+  for (const dir of dirs) {
+    const manifestPath = path.join(skillsDir, dir, SKILL_MANIFEST);
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const raw = fs.readFileSync(manifestPath, "utf-8");
+      const manifest = JSON.parse(raw);
+      const validation = validateSkillManifest(manifest);
+      if (!validation.valid) continue;
+      entries.push({
+        id: dir,
+        name: manifest.name,
+        version: manifest.version,
+        requiredCaps: manifest.requiredCaps || [],
+        description: manifest.description || "",
+        source: "installed",
+        manifestPath
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  return entries;
+}
+
 function findMatchingSkill(userMessage, context) {
   let bestSkill = null;
   let bestScore = 0;
@@ -197,11 +265,24 @@ function findMatchingSkill(userMessage, context) {
   return bestSkill;
 }
 
-function getAllSkills() {
-  return SKILLS.map(({ id, name, description }) => ({ id, name, description }));
+function getAllSkills(options = {}) {
+  const base = SKILLS.map(({ id, name, description }) => ({
+    id,
+    name,
+    description,
+    source: "builtin",
+    version: null,
+    requiredCaps: []
+  }));
+  const installed = loadInstalledSkills(options.skillsDir);
+  return base.concat(installed);
 }
 
 module.exports = {
   findMatchingSkill,
-  getAllSkills
+  getAllSkills,
+  loadInstalledSkills,
+  validateSkillManifest,
+  ALLOWED_REQUIRED_CAPS,
+  SKILL_MANIFEST
 };

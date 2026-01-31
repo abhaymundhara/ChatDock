@@ -4,8 +4,9 @@ const path = require("node:path");
 const os = require("node:os");
 const { getScopeName } = require("./utils");
 const { logAudit } = require("../utils/auditLogger");
-const { logStepMetric, logPlanOutcome } = require("../utils/planFeedback");
-const { getAllSkills } = require("../skills/skillRegistry");
+const { logStepMetric, logPlanOutcome, getPlanStats } = require("../utils/planFeedback");
+const { getAllSkills, loadInstalledSkills, validateSkillManifest, SKILL_MANIFEST } = require("../skills/skillRegistry");
+const { listChannelSessions, registerChannelSession, removeChannelSession } = require("../utils/channelBridge");
 const { executeShell, executeShellWithRunId, checkCommandSafety, osRunManager, ALLOWED_PATHS } = require("../utils/shell-executor");
 
 async function handlePlannerCommands(userMsg, state) {
@@ -143,7 +144,8 @@ async function handlePlannerCommands(userMsg, state) {
         stepStatus: {},
         skippedPlanSteps: [], // Reset skips on reorder to avoid confusion
         planOutcomeLogged: false,
-        activePlanRunId: `plan_${Date.now()}`
+        activePlanRunId: `plan_${Date.now()}`,
+        planStartedAt: null
     };
 
     logAudit("PLAN_REORDERED", { from: fromIdx, to: toIdx });
@@ -326,18 +328,196 @@ async function handlePlannerCommands(userMsg, state) {
 
   // 0b. List Capabilities
   if (normalizedMsg === "list skills" || normalizedMsg === "show skills") {
-    const skills = getAllSkills();
+    const skillsDir = path.join(state.WORKSPACE_ROOT, "skills");
+    const skills = getAllSkills({ skillsDir });
     if (!skills.length) {
       return { handled: true, response: "No skills are registered." };
     }
     const lines = ["**Registered Skills:**\n"];
     for (const skill of skills) {
-      lines.push(`- **${skill.id}**: ${skill.description}`);
+      const caps = skill.requiredCaps && skill.requiredCaps.length
+        ? `caps: ${skill.requiredCaps.join(", ")}`
+        : "caps: none";
+      const version = skill.version ? `v${skill.version}` : "";
+      const source = skill.source || "builtin";
+      lines.push(`- **${skill.id}** ${version} (${source}) — ${skill.description || "No description"} (${caps})`);
     }
     return { handled: true, response: lines.join("\n") };
   }
 
-  // 0c. List Capabilities
+  // 0c. Plan Stats
+  if (normalizedMsg === "plan stats" || normalizedMsg === "stats") {
+    const stats = getPlanStats();
+    if (!stats) {
+      return { handled: true, response: "Plan stats are not available yet." };
+    }
+
+    const successRate = (stats.successRate * 100).toFixed(1);
+    const avgDuration = stats.avgDurationMs ? `${Math.round(stats.avgDurationMs)}ms` : "n/a";
+    const corrections = stats.corrections?.total || 0;
+
+    let response = `**Plan Stats:**\n` +
+      `- Total: ${stats.totals.total}\n` +
+      `- Success: ${stats.totals.success}\n` +
+      `- Failed: ${stats.totals.failed}\n` +
+      `- Success Rate: ${successRate}%\n` +
+      `- Avg Duration: ${avgDuration}\n` +
+      `- Corrections: ${corrections}\n`;
+
+    if (stats.skills && Object.keys(stats.skills).length) {
+      response += `\n**Skill Performance:**\n`;
+      for (const [skillId, skillStats] of Object.entries(stats.skills)) {
+        const skillRate = (skillStats.successRate * 100).toFixed(1);
+        const skillAvg = skillStats.avgDurationMs ? `${Math.round(skillStats.avgDurationMs)}ms` : "n/a";
+        response += `- ${skillId}: ${skillRate}% (${skillStats.success}/${skillStats.total}), avg ${skillAvg}\n`;
+      }
+    }
+
+    return { handled: true, response };
+  }
+
+  // 0d. Channel Sessions
+  if (normalizedMsg === "list channels") {
+    const sessions = listChannelSessions();
+    if (!sessions.length) {
+      return { handled: true, response: "No channel sessions registered yet." };
+    }
+    const lines = ["**Channel Sessions:**\n"];
+    for (const session of sessions) {
+      lines.push(`- ${session.channel}:${session.userId} → ${session.sessionId}`);
+    }
+    return { handled: true, response: lines.join("\n") };
+  }
+
+  if (normalizedMsg.startsWith("register channel")) {
+    const parts = userMsg.trim().split(/\s+/);
+    const channel = parts[2];
+    const userId = parts[3];
+    const sessionId = parts[4];
+
+    if (!channel || !userId) {
+      return { handled: true, response: "Usage: register channel <channel> <userId> [sessionId]" };
+    }
+
+    const finalSessionId = registerChannelSession(channel, userId, sessionId);
+    return {
+      handled: true,
+      response: `Registered ${channel}:${userId} → ${finalSessionId}`
+    };
+  }
+
+  if (normalizedMsg.startsWith("remove channel")) {
+    const parts = userMsg.trim().split(/\s+/);
+    const channel = parts[2];
+    const userId = parts[3];
+    if (!channel || !userId) {
+      return { handled: true, response: "Usage: remove channel <channel> <userId>" };
+    }
+    const removed = removeChannelSession(channel, userId);
+    return {
+      handled: true,
+      response: removed
+        ? `Removed channel session for ${channel}:${userId}.`
+        : `No channel session found for ${channel}:${userId}.`
+    };
+  }
+
+  // 0e. Install Skill
+  if (normalizedMsg.startsWith("install skill")) {
+    const rawArg = userMsg.trim().slice("install skill".length).trim();
+    if (!rawArg) {
+      return { handled: true, response: "Usage: install skill <path-to-skill-folder>" };
+    }
+
+    const resolvedPath = path.isAbsolute(rawArg)
+      ? rawArg
+      : path.resolve(state.WORKSPACE_ROOT, rawArg);
+
+    const stats = fs.existsSync(resolvedPath) ? fs.statSync(resolvedPath) : null;
+    if (!stats) {
+      return { handled: true, response: `Skill path not found: ${rawArg}` };
+    }
+
+    const sourceDir = stats.isDirectory()
+      ? resolvedPath
+      : path.dirname(resolvedPath);
+    const manifestPath = path.join(sourceDir, SKILL_MANIFEST);
+
+    if (!fs.existsSync(manifestPath)) {
+      return { handled: true, response: `Missing ${SKILL_MANIFEST} in ${sourceDir}.` };
+    }
+
+    let manifest = null;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    } catch (err) {
+      return { handled: true, response: `Failed to parse ${SKILL_MANIFEST}: ${err.message}` };
+    }
+
+    const validation = validateSkillManifest(manifest);
+    if (!validation.valid) {
+      return { handled: true, response: `Skill manifest invalid: ${validation.errors.join(" ")}` };
+    }
+
+    const skillsDir = path.join(state.WORKSPACE_ROOT, "skills");
+    if (!fs.existsSync(skillsDir)) fs.mkdirSync(skillsDir, { recursive: true });
+
+    const slug = String(manifest.name)
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/^-+|-+$/g, "") || `skill-${Date.now()}`;
+    const destDir = path.join(skillsDir, slug);
+
+    if (fs.existsSync(destDir)) {
+      return { handled: true, response: `Skill '${slug}' is already installed.` };
+    }
+
+    fs.cpSync(sourceDir, destDir, { recursive: true });
+
+    logAudit("SKILL_INSTALLED", {
+      skill: manifest.name,
+      version: manifest.version,
+      requiredCaps: manifest.requiredCaps
+    });
+
+    return {
+      handled: true,
+      response: `Installed skill **${manifest.name}** (v${manifest.version}) with caps: ${manifest.requiredCaps.join(", ")}.`
+    };
+  }
+
+  // 0d. Remove Skill
+  if (normalizedMsg.startsWith("remove skill") || normalizedMsg.startsWith("uninstall skill")) {
+    const rawArg = userMsg
+      .trim()
+      .replace(/^remove skill/i, "")
+      .replace(/^uninstall skill/i, "")
+      .trim();
+
+    if (!rawArg) {
+      return { handled: true, response: "Usage: remove skill <name-or-id>" };
+    }
+
+    const skillsDir = path.join(state.WORKSPACE_ROOT, "skills");
+    const installed = loadInstalledSkills(skillsDir);
+    const match = installed.find((skill) =>
+      skill.id === rawArg || skill.name.toLowerCase() === rawArg.toLowerCase()
+    );
+
+    if (!match) {
+      return { handled: true, response: `No installed skill found matching '${rawArg}'.` };
+    }
+
+    fs.rmSync(path.join(skillsDir, match.id), { recursive: true, force: true });
+    logAudit("SKILL_REMOVED", { skill: match.name, version: match.version });
+
+    return {
+      handled: true,
+      response: `Removed installed skill **${match.name}** (v${match.version}).`
+    };
+  }
+
+  // 0e. List Capabilities
   if (normalizedMsg === "list capabilities" || normalizedMsg === "show capabilities") {
     const caps = getAllCapabilities();
     let response = "**Capabilities Status:**\n\n";
@@ -395,7 +575,8 @@ async function handlePlannerCommands(userMsg, state) {
       response: `Plan confirmed. Current Execution Mode: **${mode}**. Say 'execute step 1' to begin.`,
       newState: {
         ...state,
-        planStatus: "executing"
+        planStatus: "executing",
+        planStartedAt: state.planStartedAt || Date.now()
       }
     };
   }
@@ -716,10 +897,12 @@ async function handlePlannerCommands(userMsg, state) {
         stepExecutionHistory: [],
         stepStatus: {},
         planOutcomeLogged: false,
+        planStartedAt: null,
         planStatus: null,
         executingStepId: null,
         activePlanRunId: null,
-        lastPlanRequest: null
+        lastPlanRequest: null,
+        lastPlanSkillId: null
       }
     };
   }
@@ -814,6 +997,9 @@ async function handlePlannerCommands(userMsg, state) {
                   stepStatus: {},
                   planOutcomeLogged: false,
                   activePlanRunId: `plan_${Date.now()}`,
+                  lastPlanRequest: null,
+                  lastPlanSkillId: null,
+                  planStartedAt: null,
                   planChangeHistory: [historyEntry] // Reset history on load
                   // We do NOT automatically switch projectSlug based on the plan, maintaining current user context.
               }
@@ -956,6 +1142,8 @@ async function handlePlannerCommands(userMsg, state) {
                   planOutcomeLogged: false,
                   activePlanRunId: `plan_${Date.now()}`,
                   lastPlanRequest: null,
+                  lastPlanSkillId: null,
+                  planStartedAt: null,
                   planChangeHistory: [historyEntry]
               }
           };
@@ -1052,6 +1240,8 @@ async function handlePlannerCommands(userMsg, state) {
                   planOutcomeLogged: false,
                   activePlanRunId: `plan_${Date.now()}`,
                   lastPlanRequest: null,
+                  lastPlanSkillId: null,
+                  planStartedAt: null,
                   planChangeHistory: [historyEntry]
               }
           };
@@ -1259,6 +1449,9 @@ function isPlanComplete(state) {
 
 function maybeLogPlanOutcome(state, status) {
     if (!state.lastGeneratedPlan || state.planOutcomeLogged) return null;
+    const durationMs = state.planStartedAt
+        ? Date.now() - state.planStartedAt
+        : null;
     const payload = {
         sessionId: state.sessionId || "default",
         planId: state.activePlanRunId || null,
@@ -1268,6 +1461,8 @@ function maybeLogPlanOutcome(state, status) {
         source: state.planChangeHistory?.[0]?.details || "planner",
         request: state.lastPlanRequest || null,
         planSteps: state.lastGeneratedPlan?.steps || [],
+        skillId: state.lastPlanSkillId || null,
+        durationMs,
         timestamp: new Date().toISOString()
     };
     logPlanOutcome(payload);
@@ -1293,6 +1488,9 @@ async function runStepWithLedger(stepNumber, state, userMsg, executor) {
     const nextState = result.newState ? { ...result.newState } : { ...state };
     if (!nextState.planStatus || nextState.planStatus === "paused") {
         nextState.planStatus = "executing";
+    }
+    if (!nextState.planStartedAt) {
+        nextState.planStartedAt = stepStart;
     }
     nextState.executingStepId = null;
     nextState.stepStatus = updateStepStatus(nextState, stepNumber, {

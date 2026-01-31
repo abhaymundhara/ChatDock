@@ -28,11 +28,21 @@ const {
   initPlanFeedbackLogger,
   logPlanOutcome,
   logStepMetric,
-  logActionMetric
+  logActionMetric,
+  logUserCorrection,
+  getPlanStats
 } = require("./utils/planFeedback");
 const { executePlanLoop } = require("./utils/executionLoop");
 const osRunManager = require("./utils/osRunManager");
 const { findMatchingSkill } = require("./skills/skillRegistry");
+const { buildMemoryContext, autoRememberFromMessage } = require("./utils/memoryTool");
+const {
+  initChannelBridge,
+  getOrCreateSessionId,
+  registerChannelSession,
+  removeChannelSession,
+  listChannelSessions
+} = require("./utils/channelBridge");
 
 const {
   port: PORT,
@@ -71,6 +81,7 @@ initRuntime(WORKSPACE_ROOT);
 initAuditLogger(WORKSPACE_ROOT);
 initRunLogger(WORKSPACE_ROOT);
 initPlanFeedbackLogger(WORKSPACE_ROOT, MEMORY_DIR);
+initChannelBridge(WORKSPACE_ROOT);
 
 // Load prompts from external MD files
 const PROMPTS_DIR = path.join(__dirname, "../../prompts");
@@ -183,6 +194,15 @@ const KNOWN_COMMANDS = [
   "recall",
   "search memories",
   "find memories",
+  "auto memory on",
+  "auto memory off",
+  "enable auto memory",
+  "disable auto memory",
+  "memory status",
+  "memory config",
+  "show memory config",
+  "set memory",
+  "reset memory config",
   // Plan commands (explicit)
   "show plan",
   "show plan steps",
@@ -194,6 +214,8 @@ const KNOWN_COMMANDS = [
   "list plan templates",
   "load plan template",
   "check plan readiness",
+  "plan stats",
+  "stats",
   // Execution commands
   "proceed with plan",
   "execute step",
@@ -227,6 +249,13 @@ const KNOWN_COMMANDS = [
   // Skill registry commands
   "list skills",
   "show skills",
+  "install skill",
+  "remove skill",
+  "uninstall skill",
+  // Channel commands
+  "list channels",
+  "register channel",
+  "remove channel",
   // Help
   "help",
   "what can you do",
@@ -299,6 +328,7 @@ const WRITE_VERB_PATTERN = /\b(write|draft|create|compose|generate|build)\b/i;
 const PLAN_INTENT_PATTERN =
   /^(plan\b|make\s+a\s+plan\b)|\bplan\s+steps\b|\bsteps?\s+to\b/i;
 const EDIT_PLAN_PATTERN = /^edit(?:\s+this)?\s+plan\b[:\s-]*/i;
+const CORRECTION_PATTERN = /^(no|actually|not|that's not|that's wrong|incorrect|wrong)\b/i;
 
 function hasTaskFileIntent(normalized) {
   return (
@@ -541,6 +571,8 @@ app.post("/plan/reset", (req, res) => {
     state.activePlanRunId = null;
     state.planOutcomeLogged = false;
     state.lastPlanRequest = null;
+    state.lastPlanSkillId = null;
+    state.planStartedAt = null;
     sessionState.set(sessionId, state);
   }
   res.json({ ok: true });
@@ -556,12 +588,75 @@ app.get("/os/runs/:id", (req, res) => {
   res.json(run);
 });
 
+// ===== Channel Bridge Endpoints =====
+app.get("/channels/sessions", (_req, res) => {
+  res.json({ sessions: listChannelSessions() });
+});
+
+app.post("/channels/register", (req, res) => {
+  const channel = String(req.body?.channel || "").trim();
+  const userId = String(req.body?.userId || "").trim();
+  const sessionId = req.body?.sessionId ? String(req.body.sessionId).trim() : "";
+
+  if (!channel || !userId) {
+    return res.status(400).json({ error: "channel and userId are required" });
+  }
+
+  const finalSessionId = registerChannelSession(channel, userId, sessionId || null);
+  return res.json({ ok: true, sessionId: finalSessionId });
+});
+
+app.post("/channels/remove", (req, res) => {
+  const channel = String(req.body?.channel || "").trim();
+  const userId = String(req.body?.userId || "").trim();
+  if (!channel || !userId) {
+    return res.status(400).json({ error: "channel and userId are required" });
+  }
+
+  const removed = removeChannelSession(channel, userId);
+  return res.json({ ok: removed });
+});
+
+app.post("/channels/ingest", async (req, res) => {
+  const channel = String(req.body?.channel || "").trim();
+  const userId = String(req.body?.userId || "").trim();
+  const message = String(req.body?.message || "");
+  const model = req.body?.model ? String(req.body.model) : "";
+
+  if (!channel || !userId || !message) {
+    return res.status(400).json({ error: "channel, userId, and message are required" });
+  }
+
+  const sessionId = getOrCreateSessionId(channel, userId);
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${PORT}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, sessionId, model })
+    });
+    const text = await response.text();
+    return res.json({ sessionId, response: text });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
 // ===== END Plan Status Endpoint =====
 
 // Calls the planner and returns the parsed plan, or null on failure
 async function invokePlanner(userMsg, chosenModel, state) {
+  const planStats = getPlanStats();
+  const plannerSystemPrompt =
+    planStats && planStats.successRate < 0.6
+      ? `${PLANNER_SYSTEM_PROMPT}\n\nAdditional guidance: Be extra explicit and concrete. Avoid vague steps and ensure each description is executable without guessing.`
+      : PLANNER_SYSTEM_PROMPT;
+  const memoryContext = buildMemoryContext(userMsg, state);
+  const finalPlannerPrompt = memoryContext
+    ? `${plannerSystemPrompt}\n\nRelevant memory:\n${memoryContext}`
+    : plannerSystemPrompt;
   const plannerMessages = [
-    { role: "system", content: PLANNER_SYSTEM_PROMPT },
+    { role: "system", content: finalPlannerPrompt },
     { role: "user", content: userMsg },
   ];
 
@@ -898,6 +993,11 @@ app.post("/chat", async (req, res) => {
         activePlanRunId: null,
         planOutcomeLogged: false,
         lastPlanRequest: null,
+        lastPlanSkillId: null,
+        planStartedAt: null,
+        autoMemoryEnabled: true,
+        WORKSPACE_ROOT,
+        MEMORY_DIR,
       });
     }
     const state = sessionState.get(sessionId);
@@ -905,6 +1005,22 @@ app.post("/chat", async (req, res) => {
     // ===== INTENT CLASSIFICATION =====
     const intent = classifyIntent(userMsg);
     logIntentClassification(userMsg, intent);
+
+    const correctionMatch = CORRECTION_PATTERN.test(userMsg.trim());
+    if (correctionMatch) {
+      const lastAssistant = [...state.history]
+        .reverse()
+        .find((entry) => entry.role === "assistant");
+      if (lastAssistant) {
+        logUserCorrection({
+          action: "user_correction",
+          sessionId,
+          userMessage: userMsg,
+          assistantMessage: lastAssistant.content,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
 
     // Auto-clear logic for plans
     const normalizedLow = userMsg.trim().toLowerCase();
@@ -920,6 +1036,8 @@ app.post("/chat", async (req, res) => {
             state.activePlanRunId = null;
             state.planOutcomeLogged = false;
             state.lastPlanRequest = null;
+            state.lastPlanSkillId = null;
+            state.planStartedAt = null;
             sessionState.set(sessionId, state);
         } 
         // Auto-clear completed plan on new interaction
@@ -933,6 +1051,8 @@ app.post("/chat", async (req, res) => {
             state.activePlanRunId = null;
             state.planOutcomeLogged = false;
             state.lastPlanRequest = null;
+            state.lastPlanSkillId = null;
+            state.planStartedAt = null;
             sessionState.set(sessionId, state);
         }
     }
@@ -994,6 +1114,7 @@ app.post("/chat", async (req, res) => {
             planSource: state.planChangeHistory?.[0]?.details || "planner",
             planRequest: state.lastPlanRequest || null,
             planSteps: state.lastGeneratedPlan?.steps || [],
+            planSkillId: state.lastPlanSkillId || null,
             stepStatus: initialStepStatus,
             logStepMetric,
             logPlanOutcome
@@ -1062,7 +1183,23 @@ app.post("/chat", async (req, res) => {
         let usedSkill = null;
 
         if (!isEditPlanRequest) {
-          const matchedSkill = findMatchingSkill(userMsg, skillContext);
+          let matchedSkill = findMatchingSkill(userMsg, skillContext);
+          const planStats = getPlanStats();
+          if (
+            matchedSkill &&
+            planStats?.skills &&
+            planStats.skills[matchedSkill.id]
+          ) {
+            const perf = planStats.skills[matchedSkill.id];
+            if (perf.total >= 3 && perf.successRate < 0.4) {
+              logPlanning("skill_suppressed_low_success", {
+                skillId: matchedSkill.id,
+                successRate: perf.successRate,
+                total: perf.total
+              });
+              matchedSkill = null;
+            }
+          }
           if (matchedSkill) {
             usedSkill = matchedSkill;
             logPlanning("skill_selected", {
@@ -1171,6 +1308,8 @@ app.post("/chat", async (req, res) => {
           state.activePlanRunId = crypto.randomUUID();
           state.planOutcomeLogged = false;
           state.lastPlanRequest = userMsg;
+          state.lastPlanSkillId = usedSkill ? usedSkill.id : null;
+          state.planStartedAt = null;
           const editDetails = userMsg.replace(EDIT_PLAN_PATTERN, "").trim();
           const historyEntry = {
             timestamp: new Date().toISOString(),
@@ -1319,7 +1458,14 @@ app.post("/chat", async (req, res) => {
     }
 
     const messages = [
-      { role: "system", content: activeSystemPrompt },
+      {
+        role: "system",
+        content: (() => {
+          const memoryContext = buildMemoryContext(userMsg, state);
+          if (!memoryContext) return activeSystemPrompt;
+          return `${activeSystemPrompt}\n\nRelevant memory:\n${memoryContext}`;
+        })()
+      },
       ...state.history,
     ];
 
@@ -1390,6 +1536,12 @@ app.post("/chat", async (req, res) => {
     
     state.lastAnswerContent = assistantMsg;
     state.canSaveLastAnswer = true;
+
+    try {
+      autoRememberFromMessage(state, userMsg, assistantMsg);
+    } catch (err) {
+      console.warn("[memory] Auto-remember failed:", err?.message || String(err));
+    }
 
     // Send instructional line to client
     res.write(saveInstruction);

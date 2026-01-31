@@ -21,14 +21,21 @@ function handleHelpCommands(userMsg, state) {
 
 **Memory**
 - **Save:** \`remember this\` (saves last response)
+- **Find:** \`search memories <query>\`, \`recall <query>\`
 - **Manage:** \`list memories\`, \`show memory <id>\`, \`forget memory <id>\`
+- **Auto:** \`auto memory on\`, \`auto memory off\`, \`memory status\`
+- **Config:** \`memory config\`, \`set memory <key> <value>\`, \`reset memory config\`
 
 **Planning & Execution**
 - **Plan:** \`plan <goal>\`, \`show plan\`, \`cancel plan\`
 - **Execution:** \`proceed with plan\`, \`execute step <n>\`, \`plan status\`
 - **Review:** \`check plan readiness\`
 - **Edits:** \`apply edit <n>\`, \`apply organize <n>\`
-- **Skills:** \`list skills\`
+- **Skills:** \`list skills\`, \`install skill <path>\`, \`remove skill <name>\`
+- **Stats:** \`plan stats\`
+
+**Channels**
+- **Sessions:** \`list channels\`, \`register channel <channel> <userId>\`, \`remove channel <channel> <userId>\`
 
 **Safety & Profiles**
 - **Profiles:** \`list execution profiles\`, \`use execution profile <name>\`
