@@ -208,6 +208,25 @@
   background: rgba(127, 29, 29, 0.2);
 }
 
+.step-output-content {
+  font-size: 0.7rem;
+  line-height: 1.4;
+  color: #e2e8f0;
+  word-break: break-word;
+}
+
+.step-output-content strong {
+  color: #f8fafc;
+}
+
+.step-output-content code {
+  background: rgba(15, 23, 42, 0.6);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.95em;
+}
+
 .step-output-block pre {
   margin: 0;
   white-space: pre-wrap;

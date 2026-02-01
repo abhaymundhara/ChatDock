@@ -36,6 +36,7 @@ const { executePlanLoop } = require("./utils/executionLoop");
 const osRunManager = require("./utils/osRunManager");
 const { findMatchingSkill } = require("./skills/skillRegistry");
 const { buildMemoryContext, autoRememberFromMessage } = require("./utils/memoryTool");
+const { getDueReminders, updateReminder, formatReminder } = require("./utils/reminderUtils");
 const {
   initChannelBridge,
   getOrCreateSessionId,
@@ -203,6 +204,18 @@ const KNOWN_COMMANDS = [
   "show memory config",
   "set memory",
   "reset memory config",
+  // Reminder commands
+  "add reminder",
+  "remind me",
+  "list reminders",
+  "reminders",
+  "show reminder",
+  "delete reminder",
+  "remove reminder",
+  "done reminder",
+  "complete reminder",
+  "snooze reminder",
+  "check reminders",
   // Plan commands (explicit)
   "show plan",
   "show plan steps",
@@ -1206,6 +1219,11 @@ app.post("/chat", async (req, res) => {
               skillId: matchedSkill.id,
               name: matchedSkill.name
             });
+            console.log(`[Skill] Invoked skill: ${matchedSkill.id}`);
+            logStep("skill_invoked", `Skill ${matchedSkill.id}`, {
+              skillId: matchedSkill.id,
+              name: matchedSkill.name
+            });
             try {
               const buildStart = Date.now();
               parsedPlan = await matchedSkill.buildPlan(userMsg, skillContext);
@@ -1485,9 +1503,20 @@ app.post("/chat", async (req, res) => {
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache");
 
+    const dueReminders = getDueReminders(state);
+    let reminderPrefix = "";
+    if (dueReminders.length) {
+      const lines = dueReminders.map(formatReminder).join("\n");
+      reminderPrefix = `⏰ Reminders due:\n${lines}\n\n`;
+      res.write(reminderPrefix);
+      for (const reminder of dueReminders) {
+        updateReminder(state, reminder.id, { notifiedAt: new Date().toISOString() });
+      }
+    }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let assistantMsg = "";
+    let assistantMsg = reminderPrefix;
 
     try {
       while (true) {

@@ -208,6 +208,23 @@ button,
   font-size: 0.9em;
 }
 
+.message-content pre {
+  margin: 0.6rem 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--bg-selection);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+}
+
+.message-content pre code {
+  background: transparent;
+  padding: 0;
+  font-size: 1em;
+}
+
 /* Animations */
 @keyframes spin {
   from { transform: rotate(0deg); }

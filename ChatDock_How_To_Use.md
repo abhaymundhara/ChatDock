@@ -229,6 +229,36 @@ Memory can be:
 
 ---
 
+## Reminders
+
+Create reminders with optional due times.
+
+### Create
+```
+add reminder <text>
+remind me <text>
+```
+
+### List / Show
+```
+list reminders
+show reminder <id>
+```
+
+### Done / Delete / Snooze
+```
+done reminder <id>
+delete reminder <id>
+snooze reminder <id> <minutes>
+```
+
+### Check due reminders
+```
+check reminders
+```
+
+---
+
 ## Plans
 
 Once a plan exists, you can:

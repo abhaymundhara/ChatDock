@@ -26,6 +26,13 @@ function handleHelpCommands(userMsg, state) {
 - **Auto:** \`auto memory on\`, \`auto memory off\`, \`memory status\`
 - **Config:** \`memory config\`, \`set memory <key> <value>\`, \`reset memory config\`
 
+**Reminders**
+- **Create:** \`add reminder <text>\` or \`remind me <text>\`
+- **List:** \`list reminders\`
+- **Done:** \`done reminder <id>\`
+- **Delete:** \`delete reminder <id>\`
+- **Snooze:** \`snooze reminder <id> <minutes>\`
+
 **Planning & Execution**
 - **Plan:** \`plan <goal>\`, \`show plan\`, \`cancel plan\`
 - **Execution:** \`proceed with plan\`, \`execute step <n>\`, \`plan status\`

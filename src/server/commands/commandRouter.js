@@ -2,6 +2,7 @@ const { handleNotesCommands } = require("./notesCommands");
 const { handleDocsCommands } = require("./docsCommands");
 const { handleProjectsCommands } = require("./projectsCommands");
 const { handleMemoryCommands } = require("./memoryCommands");
+const { handleReminderCommands } = require("./reminderCommands");
 const { handlePlannerCommands } = require("./plannerCommands");
 const { handleHelpCommands } = require("./helpCommands");
 
@@ -45,7 +46,11 @@ async function handleCommand(userMsg, state) {
   result = handleMemoryCommands(userMsg, state);
   if (result.handled) return result;
 
-  // 6. Try Planner Commands
+  // 6. Try Reminder Commands
+  result = handleReminderCommands(userMsg, state);
+  if (result.handled) return result;
+
+  // 7. Try Planner Commands
   result = await handlePlannerCommands(userMsg, state);
   if (result.handled) return result;
 

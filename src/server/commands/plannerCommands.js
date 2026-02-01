@@ -4,6 +4,7 @@ const path = require("node:path");
 const os = require("node:os");
 const { getScopeName } = require("./utils");
 const { logAudit } = require("../utils/auditLogger");
+const { logStep } = require("../utils/runLogger");
 const { logStepMetric, logPlanOutcome, getPlanStats } = require("../utils/planFeedback");
 const { getAllSkills, loadInstalledSkills, validateSkillManifest, SKILL_MANIFEST } = require("../skills/skillRegistry");
 const { listChannelSessions, registerChannelSession, removeChannelSession } = require("../utils/channelBridge");
@@ -1594,6 +1595,11 @@ async function executeStepLogic(stepNumber, state, userMsg) {
     const step = steps[stepNumber - 1];
     const cap = getCapability(step.type);
     const executable = isExecutable(step.type);
+
+    console.log(`[Tool] Step ${stepNumber} -> ${step.type}`);
+    logStep("tool_used", `Step ${stepNumber} (${step.type})`, {
+      description: step.description
+    });
 
     logAudit("STEP_EXECUTION_ATTEMPTED", { step: stepNumber, type: step.type });
 

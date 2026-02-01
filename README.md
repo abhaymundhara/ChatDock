@@ -219,6 +219,21 @@ Memory is user-controlled, with auto-memory optional and configurable.
 
 ---
 
+## ⏰ Reminders
+
+```text
+add reminder <text>
+remind me <text>
+list reminders
+show reminder <id>
+done reminder <id>
+delete reminder <id>
+snooze reminder <id> <minutes>
+check reminders
+```
+
+---
+
 ## 🧰 Skills
 
 ```text
@@ -398,3 +413,6 @@ Inspired by:
 - Personal AI assistants (ChatDock)
 - Agentic workflows
 - Modern local LLM ecosystems
+### ⏰ Reminders
+- Add reminders with optional due times
+- List, snooze, and complete reminders
