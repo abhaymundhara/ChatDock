@@ -33,12 +33,23 @@ coverage/
 last_model.txt
 config/last_model.txt
 
-TEST_SCENARIOS.md
-Documentation.MD
-
 # Bun
 .bun/
 
-# User-specific memory (auto-created on first run)
+# Test/Dev files
+TEST_SCENARIOS.md
+Documentation.MD
+
+# User data (auto-created per user)
 memory/
 docs/
+
+# Sessions (user-specific, auto-created)
+sessions/
+
+# API Keys (never commit)
+*.key
+*.secret
+
+# ChatDock user config (created at ~/.chatdock/)
+# Note: The actual user data lives in ~/.chatdock/, not in repo

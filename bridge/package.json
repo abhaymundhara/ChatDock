@@ -1,0 +1,16 @@
+{
+  "name": "chatdock-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp bridge for ChatDock using Baileys",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "build": "echo 'No build needed for this bridge'"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "ws": "^8.18.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
