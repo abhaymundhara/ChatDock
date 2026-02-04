@@ -21,14 +21,20 @@ scheduler.start();
 // Pass scheduler to agent for tool access
 agent.setScheduler(scheduler);
 
-// 3. Start Channels
+// 3. Start Channels & Message Bus
+const { getMessageBus } = require("./bus/queue");
+const bus = getMessageBus();
+
 const telegram = new TelegramChannel(config);
-telegram.setAgent(agent);
+telegram.initOutbound(); // Initialize outbound listener
 telegram.start().catch(err => console.error("[telegram] Failed to start:", err));
 
 const whatsapp = new WhatsAppChannel(config);
-whatsapp.setAgent(agent);
+whatsapp.initOutbound(); // Initialize outbound listener
 whatsapp.start().catch(err => console.error("[whatsapp] Failed to start:", err));
+
+// 4. Start Agent Listen Loop (Nanobot Architecture)
+agent.listen(bus).catch(err => console.error("[agent] Listen error:", err));
 
 const app = express();
 app.use(cors());

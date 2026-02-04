@@ -11,6 +11,8 @@ const { getSkillsLoader } = require("../skills/loader");
 const { getProvider } = require("../providers/provider-factory");
 const { getServerConfig, loadSettings } = require("../config/settings");
 
+const { ToolParser } = require("../utils/tool-parser");
+
 const MAX_ITERATIONS = 20; // Prevent infinite loops
 
 class Agent {
@@ -76,18 +78,46 @@ class Agent {
    */
   async run(userMessage, res, options = {}) {
     try {
+      // Explicit reset/clear command
+      if (userMessage.toLowerCase() === "reset" || userMessage.toLowerCase() === "clear") {
+        this.memory.clear();
+        res.write("Conversation history cleared. How can I help you today?");
+        res.end();
+        return;
+      }
+
       // Add user message to memory
-      this.memory.add("user", userMessage);
+      this.memory.add("user", userMessage, options);
       
       const settings = this._refreshConfig();
-      const systemPrompt = this.context.buildSystemPrompt();
-      const tools = this.tools.getAllTools();
+      
+      // Determine system prompt (check if options specify a specialist)
+      const systemPrompt = options.specialist 
+        ? this.context.buildSpecialistPrompt(options.specialist)
+        : this.context.buildSystemPrompt();
+
+      let tools = this.tools.getAllTools();
+
+      // Filter tools for tiny models to reduce noise
+      if (this.context._isTinyModel(options.model || settings.model)) {
+        const essentialCategories = ["fs", "planner", "message"];
+        tools = tools.filter(t => essentialCategories.includes(t.__category));
+        console.log(`[agent] Filtered tools to ${tools.length} for tiny model`);
+      }
+
+      // Strip internal metadata before sending to LLM
+      const cleanedTools = tools.map(({ __category, __type, ...rest }) => rest);
 
       // Build initial messages
       let messages = [
         { role: "system", content: systemPrompt },
-        ...this.memory.getRecentMessages(15),
+        ...this.memory.getRecentMessages(15, options.sessionId),
       ];
+
+      // Add task description if this is a subagent/specialist task
+      if (options.taskDescription) {
+        messages.push({ role: "system", content: `TASK: ${options.taskDescription}` });
+      }
 
       let iteration = 0;
       let finalContent = "";
@@ -97,8 +127,8 @@ class Agent {
         iteration++;
 
         const response = await this.llm.chat(messages, {
-          tools,
-          stream: iteration === 1, // Only stream first response
+          tools: cleanedTools,
+          stream: iteration === 1 && !options.noStream, // Only stream first response
           model: options.model || settings.model,
         });
 
@@ -140,6 +170,14 @@ class Agent {
         }
 
         // Handle tool calls
+        if (toolCalls.length === 0 && content) {
+          // If no native tool calls, try parsing content for text-based tool calls
+          toolCalls = ToolParser.parse(content);
+          if (toolCalls.length > 0) {
+            console.log(`[agent] Parsed ${toolCalls.length} tool calls from text`);
+          }
+        }
+
         if (toolCalls.length > 0) {
           // Add assistant message with tool calls to messages
           messages.push({
@@ -204,7 +242,7 @@ class Agent {
 
       // Save final response to memory
       if (finalContent) {
-        this.memory.add("assistant", finalContent);
+        this.memory.add("assistant", finalContent, options);
       }
 
       res.end();
@@ -224,21 +262,43 @@ class Agent {
    * Matches nanobot's process_direct with proper iteration
    */
   async processDirect(userMessage, context = {}) {
+    // Explicit reset/clear command
+    if (userMessage.toLowerCase() === "reset" || userMessage.toLowerCase() === "clear") {
+      this.memory.clear();
+      return "Conversation history cleared. How can I help you today?";
+    }
+
     // Don't pollute memory with cron tasks
     if (!context.isHeartbeat && !context.isCron) {
-      this.memory.add("user", userMessage, context.userId);
+      this.memory.add("user", userMessage, context);
     }
 
     const settings = this._refreshConfig();
 
     try {
-      const systemPrompt = this.context.buildSystemPrompt();
-      const tools = this.tools.getAllTools();
+      // Determine system prompt
+      const systemPrompt = context.specialist 
+        ? this.context.buildSpecialistPrompt(context.specialist)
+        : this.context.buildSystemPrompt();
+
+      let tools = this.tools.getAllTools();
+
+      // Filter tools for tiny models
+      if (this.context._isTinyModel(settings.model)) {
+        const essentialCategories = ["fs", "planner", "message"];
+        tools = tools.filter(t => essentialCategories.includes(t.__category));
+      }
+      // Strip internal metadata
+      const cleanedTools = tools.map(({ __category, __type, ...rest }) => rest);
 
       let messages = [
         { role: "system", content: systemPrompt },
-        ...this.memory.getRecentMessages(10),
+        ...this.memory.getRecentMessages(10, context.sessionId),
       ];
+
+      if (context.taskDescription) {
+        messages.push({ role: "system", content: `TASK: ${context.taskDescription}` });
+      }
 
       let iteration = 0;
       let finalContent = "";
@@ -247,14 +307,18 @@ class Agent {
         iteration++;
 
         const response = await this.llm.chat(messages, {
-          tools,
+          tools: cleanedTools,
           stream: false,
           model: settings.model,
         });
 
         const data = await response.json();
         const content = data.message?.content || "";
-        const toolCalls = data.message?.tool_calls || [];
+        let toolCalls = data.message?.tool_calls || [];
+
+        if (toolCalls.length === 0 && content) {
+          toolCalls = ToolParser.parse(content);
+        }
 
         if (toolCalls.length > 0) {
           // Add assistant message with tool calls
@@ -313,13 +377,50 @@ class Agent {
 
       // Save to memory (skip for heartbeat/cron)
       if (finalContent && !context.isHeartbeat && !context.isCron) {
-        this.memory.add("assistant", finalContent);
+        this.memory.add("assistant", finalContent, context);
       }
 
       return finalContent;
     } catch (e) {
       console.error("Agent Direct Error:", e);
       return `Sorry, I encountered an error: ${e.message}`;
+    }
+  }
+  /**
+   * Start listening for messages on the bus
+   * Matches nanobot's main loop architecture
+   */
+  async listen(bus) {
+    console.log("[agent] Agent is listening for messages...");
+    
+    while (true) {
+      try {
+        // Blocks until a message is available
+        const msg = await bus.consumeInbound(null); // No timeout
+        
+        console.log(`[agent] Processing inbound message from ${msg.channelType}`);
+        
+        // Process the message
+        // For bus-delivered messages, we use processDirect
+        const responseText = await this.processDirect(msg.text, {
+          userId: msg.userId,
+          sessionId: msg.sessionId || msg.userId,
+          platform: msg.channelType,
+        });
+        
+        // Publish response
+        await bus.publishOutbound({
+          channelType: msg.channelType,
+          userId: msg.userId,
+          sessionId: msg.sessionId || msg.userId,
+          text: responseText,
+          metadata: msg.metadata,
+        });
+        
+      } catch (e) {
+        console.error("[agent] Error in listen loop:", e);
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
   }
 }

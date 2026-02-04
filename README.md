@@ -23,6 +23,7 @@
 - 📅 **Cron Scheduler**: Schedule automated tasks
 - 🧠 **Memory**: Persistent long-term memory
 - 🔒 **Security**: Path validation and command safety checks
+- ⚡ **Tiny Model Support**: Optimized for models < 7B (Llama 3.2 1B, Qwen 0.5B, etc.)
 
 ## �️ Desktop Interface
 

@@ -68,19 +68,16 @@ class WhatsAppChannel {
       const { sender, content } = msg;
       console.log(`[whatsapp] Message from ${sender}: ${content.substring(0, 50)}...`);
 
-      if (this.agent) {
-        try {
-          const response = await this.agent.processDirect(content, {
-            userId: sender,
-            channel: "whatsapp",
-          });
-
-          // Send response back
-          await this.send({ chat_id: sender, content: response });
-        } catch (error) {
-          console.error("[whatsapp] Error processing message:", error);
-        }
-      }
+      // Send to Message Bus (Nanobot way)
+      const { getMessageBus } = require("../bus/queue");
+      const bus = getMessageBus();
+      
+      await bus.publishInbound({
+        channelType: "whatsapp",
+        userId: sender,
+        sessionId: sender,
+        text: content,
+      });
     } else if (type === "status") {
       console.log(`[whatsapp] Status: ${msg.status}`);
     } else if (type === "qr") {
@@ -88,6 +85,18 @@ class WhatsAppChannel {
     } else if (type === "error") {
       console.error(`[whatsapp] Bridge error: ${msg.error}`);
     }
+  }
+
+  /**
+   * Initialize outbound listener
+   */
+  async initOutbound() {
+    const { getMessageBus } = require("../bus/queue");
+    const bus = getMessageBus();
+    
+    bus.subscribe("whatsapp", async (msg) => {
+      await this.send({ chat_id: msg.userId, content: msg.text });
+    });
   }
 
   async send(message) {

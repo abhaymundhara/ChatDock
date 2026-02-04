@@ -17,18 +17,20 @@ class SubagentManager extends EventEmitter {
    * Spawn a subagent to handle a task in the background
    * @param {Object} options - Spawn options
    * @param {string} options.task - Task description for the subagent
+   * @param {string} options.specialist - Optional specialist name (skill)
    * @param {string} options.name - Optional human-readable name
    * @param {boolean} options.notify - Whether to notify when complete
    * @returns {Object} - Subagent info { id, name, task, status }
    */
-  spawn({ task, name, notify = true }) {
+  spawn({ task, specialist, name, notify = true }) {
     const id = uuidv4();
-    const subagentName = name || `Subagent-${id.slice(0, 8)}`;
+    const subagentName = name || (specialist ? `${specialist}-${id.slice(0, 4)}` : `Subagent-${id.slice(0, 8)}`);
     
     const subagent = {
       id,
       name: subagentName,
       task,
+      specialist,
       status: "running",
       result: null,
       error: null,
@@ -38,10 +40,10 @@ class SubagentManager extends EventEmitter {
     };
     
     this.subagents.set(id, subagent);
-    console.log(`[subagent] Spawned: ${subagentName} (${id})`);
+    console.log(`[subagent] Spawned: ${subagentName} (${id}) ${specialist ? `as ${specialist}` : ""}`);
     
     // Execute in background
-    this._execute(id, task).catch(err => {
+    this._execute(id).catch(err => {
       console.error(`[subagent] Error in ${id}:`, err);
     });
     
@@ -49,6 +51,7 @@ class SubagentManager extends EventEmitter {
       id,
       name: subagentName,
       task,
+      specialist,
       status: "running",
     };
   }
@@ -57,16 +60,16 @@ class SubagentManager extends EventEmitter {
    * Execute the subagent task
    * @private
    */
-  async _execute(id, task) {
+  async _execute(id) {
     const subagent = this.subagents.get(id);
     if (!subagent) return;
     
     try {
-      // Use the main agent's processDirect for now
-      // In a full implementation, this could use worker threads
-      const result = await this.agent.processDirect(task, {
+      const result = await this.agent.processDirect(subagent.task, {
         isSubagent: true,
         subagentId: id,
+        specialist: subagent.specialist,
+        taskDescription: subagent.task,
       });
       
       subagent.status = "completed";
@@ -76,8 +79,17 @@ class SubagentManager extends EventEmitter {
       console.log(`[subagent] Completed: ${subagent.name} (${id})`);
       this.emit("complete", { id, name: subagent.name, result });
       
-      // If notify is enabled, we could send a message through channels
-      // This would require access to channel references
+      // Notify back through Message Bus (Nanobot way)
+      const { getMessageBus } = require("../bus/queue");
+      const bus = getMessageBus();
+      
+      await bus.publishOutbound({
+        channelType: subagent.channelType || "system",
+        userId: subagent.userId || "system",
+        sessionId: subagent.sessionId || "default",
+        text: `✅ **Task Completed: ${subagent.name}**\n\nResult:\n${result}`,
+        metadata: { subagentId: id }
+      });
       
     } catch (err) {
       subagent.status = "failed";

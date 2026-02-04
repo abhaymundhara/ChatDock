@@ -95,18 +95,32 @@ class TelegramChannel {
     console.log(`[telegram] Message from ${userId}: ${msg.text}`);
     this.chatIds.set(userId, chatId);
 
-    // Send to Agent
-    if (this.agent) {
-      // Create a response collector
-      const response = await this.agent.processDirect(msg.text, {
-        userId,
-        platform: "telegram"
-      });
-      
-      if (response && response.trim()) {
-        await this.sendMessage(chatId, response);
+    // Send to Message Bus (Nanobot way)
+    const { getMessageBus } = require("../bus/queue");
+    const bus = getMessageBus();
+    
+    await bus.publishInbound({
+      channelType: "telegram",
+      userId: userId,
+      sessionId: userId, // Use userId as sessionId for telegram
+      text: msg.text,
+      metadata: { chatId }
+    });
+  }
+
+  /**
+   * Initialize outbound listener
+   */
+  async initOutbound() {
+    const { getMessageBus } = require("../bus/queue");
+    const bus = getMessageBus();
+    
+    bus.subscribe("telegram", async (msg) => {
+      const chatId = msg.metadata?.chatId || this.chatIds.get(msg.userId);
+      if (chatId) {
+        await this.sendMessage(chatId, msg.text);
       }
-    }
+    });
   }
 
   async sendMessage(chatId, text) {
@@ -120,7 +134,7 @@ class TelegramChannel {
         body: JSON.stringify({
           chat_id: chatId,
           text: text,
-          parse_mode: "Markdown" // Try markdown, might fail if invalid syntax
+          parse_mode: "Markdown" 
         })
       });
     } catch (e) {

@@ -9,48 +9,81 @@ const path = require("path");
 class Memory {
   constructor(userDataPath) {
     this.userDataPath = userDataPath;
+    this.sessionsDir = path.join(userDataPath, "sessions");
     this.history = [];
-    this.sessionFile = userDataPath ? path.join(userDataPath, "session.json") : null;
+    this.currentSessionId = "default";
+    
+    // Ensure sessions directory exists
+    if (!fs.existsSync(this.sessionsDir)) {
+      try {
+        fs.mkdirSync(this.sessionsDir, { recursive: true });
+      } catch (e) {
+        console.error("Failed to create sessions directory:", e);
+      }
+    }
   }
 
-  load() {
-    if (!this.sessionFile) return;
+  getSessionFile(sessionId) {
+    return path.join(this.sessionsDir, `${sessionId || "default"}.json`);
+  }
+
+  load(sessionId = "default") {
+    this.currentSessionId = sessionId;
+    const sessionFile = this.getSessionFile(sessionId);
+    
     try {
-      if (fs.existsSync(this.sessionFile)) {
-        const data = JSON.parse(fs.readFileSync(this.sessionFile, "utf-8"));
+      if (fs.existsSync(sessionFile)) {
+        const data = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
         this.history = data.history || [];
+      } else {
+        this.history = [];
       }
     } catch (e) {
-      console.warn("Failed to load session:", e);
+      console.warn(`Failed to load session ${sessionId}:`, e);
+      this.history = [];
     }
   }
 
   save() {
-    if (!this.sessionFile) return;
+    const sessionFile = this.getSessionFile(this.currentSessionId);
     try {
-      fs.writeFileSync(this.sessionFile, JSON.stringify({ history: this.history }, null, 2));
+      fs.writeFileSync(sessionFile, JSON.stringify({ history: this.history }, null, 2));
     } catch (e) {
-      console.warn("Failed to save session:", e);
+      console.warn(`Failed to save session ${this.currentSessionId}:`, e);
     }
   }
 
-  add(role, content, name = null) {
+  add(role, content, context = {}) {
+    // context can contain userId/sessionId
+    const sessionId = context.sessionId || "default";
+    if (this.currentSessionId !== sessionId) {
+      this.load(sessionId);
+    }
+
     const msg = { role, content };
-    if (name) msg.name = name;
+    if (context.userId) msg.name = context.userId;
+    
     this.history.push(msg);
     this.save();
   }
 
-  getMessages() {
+  getMessages(sessionId = "default") {
+    if (this.currentSessionId !== sessionId) {
+      this.load(sessionId);
+    }
     return [...this.history];
   }
 
-  getRecentMessages(limit = 15) {
-    if (this.history.length <= limit) return this.getMessages();
-    return this.history.slice(-limit);
+  getRecentMessages(limit = 15, sessionId = "default") {
+    const history = this.getMessages(sessionId);
+    if (history.length <= limit) return history;
+    return history.slice(-limit);
   }
 
-  clear() {
+  clear(sessionId = "default") {
+    if (this.currentSessionId !== sessionId) {
+      this.currentSessionId = sessionId;
+    }
     this.history = [];
     this.save();
   }

@@ -143,13 +143,22 @@ const executors = {
     };
   },
 
-  async task({ agent_type, task_description, context }) {
-    // Task tool for spawning subagents - return special marker
+  async task({ agent_type, task_description, context, __context }) {
+    const { subagentManager } = __context || {};
+    if (!subagentManager) {
+      return { error: "Subagent manager not available" };
+    }
+
+    const info = subagentManager.spawn({
+      task: task_description,
+      specialist: agent_type,
+      name: agent_type ? `${agent_type} specialist` : null,
+    });
+
     return {
-      spawn_subagent: true,
-      agent_type,
-      task_description,
-      context: context || "",
+      success: true,
+      message: `Subagent spawned for task: ${task_description}. I will notify you when it's done.`,
+      subagent: info,
     };
   },
 };
